@@ -1,0 +1,36 @@
+languages:
+  - ita
+
+modalities:
+  - text
+
+task_types:
+  # - Classification
+  # - PairClassification
+  # - STS
+  # - Clustering
+  - Retrieval
+
+excluded_tasks:
+  - XPQARetrieval
+  - LanguageClassification
+  - SwissJudgementClassification
+  - XStance
+  - XGlueWPRReranking
+  - BelebeleRetrieval
+  - JinaVDRGitHubReadmeRetrieval
+  - JinaVDRWikimediaCommonsDocumentsRetrieval
+  - VDRMultilingualRetrieval
+  - ItaCaseholdClassification
+  - JinaVDREuropeanaItScansRetrieval
+  - DadoEvalCoarseClassification
+  - SIB200Classification
+  - MultiEURLEXMultilabelClassification
+  # causing_errors
+  - ItaCaseholdClassification
+  - JinaVDREuropeanaItScansRetrieval
+  # italian_but_non_relevant
+  - DadoEvalCoarseClassification
+  - SIB200Classification
+  - MultiEURLEXMultilabelClassification
+    
