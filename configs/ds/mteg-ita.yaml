@@ -29,8 +29,12 @@ excluded_tasks:
   # causing_errors
   - ItaCaseholdClassification
   - JinaVDREuropeanaItScansRetrieval
+  - MintakaRetrieval
+  - MKQARetrieval # just contain train split
   # italian_but_non_relevant
   - DadoEvalCoarseClassification
   - SIB200Classification
   - MultiEURLEXMultilabelClassification
+  # too long
+  - MultiLongDocRetrieval
     

@@ -1,4 +1,4 @@
 .codex
-model_predictions*
+results/
 .venv
 *ipynb

@@ -42,14 +42,9 @@ def build_tasks(dataset_config: dict[str, Any]) -> list[Any]:
         languages=dataset_config["languages"],
         modalities=dataset_config["modalities"],
         task_types=dataset_config["task_types"],
+        eval_splits=['test']
     )
     return [task for task in tasks if task.metadata.name not in excluded]
-
-
-def default_output_dir(model_name: str) -> Path:
-    model_slug = model_name.rstrip("/").split("/")[-1]
-    return REPO_ROOT / f"model_predictions--{model_slug}"
-
 
 
 def parse_args() -> argparse.Namespace:
@@ -92,11 +87,18 @@ def main() -> None:
 
     tasks = build_tasks(dataset_config)
 
-    model_name = model_config["model"]
-    encode_kwargs = normalize_encode_kwargs(model_config.get("encode_kwargs"))
-    output_dir = args.output_dir or default_output_dir(model_name)
+    # for task in tasks:
+    #     try:
+    #         print(f"Loading: {task.metadata.name} ({task.metadata.type})")
+    #         task.load_data()
+    #         print("  OK")
+    #     except Exception as e:
+    #         print(f"  FAIL: {task.metadata.name}: {e}")
 
-    print('output_dir --> ', output_dir)
+    model_name = model_config["model"]
+    print(model_config.get("encode_kwargs"))
+    encode_kwargs = normalize_encode_kwargs(model_config.get("encode_kwargs"))
+    output_dir = args.output_dir or REPO_ROOT
 
     model = SentenceTransformer(model_name, device=args.device)
     cache = mteb.ResultCache(cache_path=str(output_dir))
