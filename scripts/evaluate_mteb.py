@@ -1,7 +1,3 @@
-# #!/usr/bin/env python3
-
-# from __future__ import annotations
-
 import mteb
 import yaml
 import argparse
@@ -42,7 +38,7 @@ def build_tasks(dataset_config: dict[str, Any]) -> list[Any]:
         languages=dataset_config["languages"],
         modalities=dataset_config["modalities"],
         task_types=dataset_config["task_types"],
-        eval_splits=['test']
+        eval_splits=["test"],
     )
     return [task for task in tasks if task.metadata.name not in excluded]
 
@@ -77,7 +73,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-
 def main() -> None:
     bench_start = time.perf_counter()
     args = parse_args()
@@ -86,14 +81,6 @@ def main() -> None:
     model_config = load_yaml(args.model_config)
 
     tasks = build_tasks(dataset_config)
-
-    # for task in tasks:
-    #     try:
-    #         print(f"Loading: {task.metadata.name} ({task.metadata.type})")
-    #         task.load_data()
-    #         print("  OK")
-    #     except Exception as e:
-    #         print(f"  FAIL: {task.metadata.name}: {e}")
 
     model_name = model_config["model"]
     print(model_config.get("encode_kwargs"))
