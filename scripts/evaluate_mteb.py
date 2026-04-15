@@ -8,28 +8,10 @@ from pathlib import Path
 from sentence_transformers import SentenceTransformer
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-
-
 def load_yaml(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as handle:
         data = yaml.safe_load(handle)
     return data
-
-
-def normalize_encode_kwargs(raw_value: Any) -> dict[str, Any]:
-    if raw_value is None:
-        return {}
-    if isinstance(raw_value, dict):
-        return raw_value
-    if isinstance(raw_value, list):
-        merged: dict[str, Any] = {}
-        for item in raw_value:
-            if not isinstance(item, dict):
-                raise ValueError("Each item in encode_kwargs must be a mapping")
-            merged.update(item)
-        return merged
-    raise ValueError("encode_kwargs must be a mapping or a list of mappings")
 
 
 def build_tasks(dataset_config: dict[str, Any]) -> list[Any]:
@@ -75,18 +57,14 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     bench_start = time.perf_counter()
-    args = parse_args()
 
+    args = parse_args()
     dataset_config = load_yaml(args.dataset_config)
     model_config = load_yaml(args.model_config)
-
     tasks = build_tasks(dataset_config)
-
     model_name = model_config["model"]
-    print(model_config.get("encode_kwargs"))
-    encode_kwargs = normalize_encode_kwargs(model_config.get("encode_kwargs"))
-    output_dir = args.output_dir or REPO_ROOT
-
+    encode_kwargs = model_config.get("encode_kwargs")
+    output_dir = args.output_dir or "."
     model = SentenceTransformer(model_name, device=args.device)
     cache = mteb.ResultCache(cache_path=str(output_dir))
 

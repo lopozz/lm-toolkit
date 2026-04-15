@@ -5,10 +5,10 @@ modalities:
   - text
 
 task_types:
-  # - Classification
-  # - PairClassification
-  # - STS
-  # - Clustering
+  - Classification
+  - PairClassification
+  - STS
+  - Clustering
   - Retrieval
 
 excluded_tasks:
