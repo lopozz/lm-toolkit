@@ -1,0 +1,3 @@
+model: opensearch-project/opensearch-neural-sparse-encoding-multilingual-v1
+encode_kwargs:
+  batch_size: 4

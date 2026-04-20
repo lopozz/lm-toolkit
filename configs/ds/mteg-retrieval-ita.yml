@@ -1,0 +1,23 @@
+languages:
+  - ita
+
+modalities:
+  - text
+
+task_types:
+  - Retrieval
+
+excluded_tasks:
+  - XPQARetrieval
+  - BelebeleRetrieval
+  - JinaVDRGitHubReadmeRetrieval
+  - JinaVDRWikimediaCommonsDocumentsRetrieval
+  - VDRMultilingualRetrieval
+  - JinaVDREuropeanaItScansRetrieval
+  # causing_errors
+  - JinaVDREuropeanaItScansRetrieval
+  - MintakaRetrieval
+  - MKQARetrieval # just contain train split
+  # too long
+  - MultiLongDocRetrieval
+    
