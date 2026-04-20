@@ -1,4 +1,5 @@
 .codex
 results/
 .venv
-*ipynb
+Untitled-1.ipynb
+models/
