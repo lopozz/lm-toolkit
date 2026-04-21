@@ -6,6 +6,6 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "accelerate>=1.13.0",
-    "mteb[xet]>=2.12.16",
+    "mteb[bm25s,xet]>=2.12.16",
     "ruff>=0.15.10",
 ]
