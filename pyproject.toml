@@ -8,4 +8,5 @@ dependencies = [
     "accelerate>=1.13.0",
     "mteb[bm25s,xet]>=2.12.16",
     "ruff>=0.15.10",
+    "streamlit>=1.45.0",
 ]
