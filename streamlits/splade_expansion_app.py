@@ -96,11 +96,15 @@ def load_tokenizer(model_name_or_path: str):
     return AutoTokenizer.from_pretrained(model_name_or_path, use_fast=True)
 
 
-def tokenizer_for_model(model_name: str) -> str:
+def tokenizer_for_model(model_name: str) -> str | None:
     known_paths = {
         "opensearch-neural-sparse-encoding-multilingual-v1": "opensearch-project/opensearch-neural-sparse-encoding-multilingual-v1",
         "splade-bert-base-italian-xxl-uncased-cv": "nickprock/splade-bert-base-italian-xxl-uncased-cv",
     }
+
+    if "bm25" in model_name.lower():
+        return None
+
     return known_paths.get(model_name, model_name)
 
 
@@ -551,17 +555,24 @@ def main() -> None:
     selection = st.selectbox("Sentence", options=list(sentence_options))
     selected_row = sentence_options[selection]
 
-    try:
-        load_tokenizer(tokenizer_model)
-    except Exception as exc:
-        st.error(f"Could not load tokenizer '{tokenizer_model}': {exc}")
-        return
+    if tokenizer_model is not None:
+        try:
+            load_tokenizer(tokenizer_model)
+        except Exception as exc:
+            st.error(f"Could not load tokenizer '{tokenizer_model}': {exc}")
+            return
+    
+    sentence_view = (
+        sentence_html(str(selected_row["text"]), tokenizer_model)
+        if tokenizer_model is not None
+        else preserve_whitespace(str(selected_row["text"]))
+    )
 
     st.markdown(
         f"""
         <div class="sentence-card">
           <div class="sentence-label">Sentence #{selected_row['id']} · mode: {escape_html(str(selected_row['mode']))}</div>
-          <div class="sentence-text">{sentence_html(str(selected_row['text']), tokenizer_model)}</div>
+          <div class="sentence-text">{sentence_view}</div>
         </div>
         """,
         unsafe_allow_html=True,
