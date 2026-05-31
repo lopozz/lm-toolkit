@@ -3,3 +3,4 @@ results/
 .venv
 Untitled-1.ipynb
 models/
+__pycache__
