@@ -50,7 +50,7 @@ def escape_html(text: str) -> str:
 
 
 @st.cache_data(show_spinner=False)
-def load_queries(path_str: str) -> list[dict[str, Any]]:
+def load_queries(path_str: str, modified_ns: int) -> list[dict[str, Any]]:
     payload = json.loads(Path(path_str).read_text(encoding="utf-8"))
     if not isinstance(payload, dict) or not isinstance(payload.get("queries"), list):
         raise ValueError("Expected an object with a 'queries' list.")
@@ -139,8 +139,10 @@ def token_temperature(weight: float, min_weight: float, max_weight: float, rank:
     return 1.0 - (rank / max(total - 1, 1)) * 0.65
 
 
-def chip_html(items: list[dict[str, Any]], *, caption: str, limit: int) -> str:
-    visible_items = sorted_expansion(items)[:limit]
+def chip_html(items: list[dict[str, Any]], *, caption: str, limit: int | None) -> str:
+    visible_items = sorted_expansion(items)
+    if limit is not None:
+        visible_items = visible_items[:limit]
     if not visible_items:
         return textwrap.dedent(
             f"""
@@ -305,7 +307,14 @@ def render_document(
     expansion = document.get("expansion", [])
     if query_tokens is not None:
         expansion = keep_tokens(expansion, query_tokens)
-    st.markdown(chip_html(expansion, caption="Document representation", limit=top_n), unsafe_allow_html=True)
+    st.markdown(
+        chip_html(
+            expansion,
+            caption="Document representation",
+            limit=None if query_tokens is not None else top_n,
+        ),
+        unsafe_allow_html=True,
+    )
 
 
 def render_model(
@@ -369,7 +378,7 @@ def main() -> None:
     with st.sidebar:
         st.header("Controls")
         data_path = st.text_input("JSON path", value=str(DEFAULT_DATA_PATH))
-        top_n = st.slider("Visible terms", min_value=5, max_value=50, value=18)
+        top_n = st.slider("Visible terms", min_value=5, max_value=100, value=100)
         search_query = st.text_input("Search query", placeholder="Filter by query text")
 
     data_file = Path(data_path)
@@ -378,7 +387,7 @@ def main() -> None:
         return
 
     try:
-        queries = load_queries(str(data_file))
+        queries = load_queries(str(data_file), data_file.stat().st_mtime_ns)
     except (json.JSONDecodeError, ValueError) as exc:
         st.error(f"Could not load comparison data: {exc}")
         return
@@ -419,8 +428,8 @@ def main() -> None:
             help=(
                 "Filter each document representation to exact token matches shared with that model's query. "
                 "The query representation remains unchanged. "
-                "The intersection is computed from all tokens stored in the JSON before the "
-                "'Visible terms' limit is applied."
+                "The intersection is computed from all tokens stored in the JSON and all shared "
+                "document tokens are shown, regardless of the 'Visible terms' limit."
             ),
         )
 
@@ -450,7 +459,7 @@ def main() -> None:
     st.markdown(
         f"""
         <section class="hero">
-          <div class="eyebrow">Query #{query_index + 1}</div>
+          <div class="eyebrow">Query #{query_index + 1} · ID {escape_html(str(query.get("qid", "")))}</div>
           <div class="query-text">{escape_html(str(query.get("text", "")))}</div>
         </section>
         """,

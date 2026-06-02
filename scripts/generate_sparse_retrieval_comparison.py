@@ -12,6 +12,11 @@ import torch
 from datasets import load_dataset
 from rich.progress import track
 from sentence_transformers import SparseEncoder
+from sentence_transformers.sentence_transformer.modules import Router, Transformer
+from sentence_transformers.sparse_encoder.modules import (
+    SparseStaticEmbedding,
+    SpladePooling,
+)
 
 
 DEFAULT_MODELS = {
@@ -40,12 +45,6 @@ def parse_args() -> argparse.Namespace:
         default=Path("streamlits/sparse_retrieval_comparison.json"),
     )
     parser.add_argument(
-        "--top-terms",
-        type=int,
-        default=100,
-        help="Maximum number of active terms stored per representation. Use -1 to keep all terms.",
-    )
-    parser.add_argument(
         "--query-limit",
         type=int,
         help="Optional limit for faster exploratory exports.",
@@ -65,20 +64,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bm25-label", default=DEFAULT_BM25_LABEL)
     parser.add_argument("--bm25-model-name", default=DEFAULT_BM25_MODEL)
     parser.add_argument("--skip-bm25", action="store_true")
-    return parser.parse_args()
-
-
-def normalize_model_name(model_name: str) -> str:
-    return model_name.replace("/", "__")
-
-
-def prediction_path(results_dir: Path, model_name: str, task_name: str) -> Path:
-    return (
-        results_dir
-        / normalize_model_name(model_name)
-        / "prediction_folder"
-        / f"{task_name}_predictions.json"
+    parser.add_argument(
+        "--no-query-expansion",
+        action="store_false",
+        dest="query_expansion",
+        help="Use lexical query tokens instead of SPLADE query expansion.",
     )
+    return parser.parse_args()
 
 
 def load_predictions(
@@ -88,7 +80,12 @@ def load_predictions(
     language: str,
     split: str,
 ) -> dict[str, dict[str, float]]:
-    path = prediction_path(results_dir, model_name, task_name)
+    path = (
+        results_dir
+        / model_name.replace("/", "__")
+        / "prediction_folder"
+        / f"{task_name}_predictions.json"
+    )
     payload = json.loads(path.read_text(encoding="utf-8"))
     return {
         str(query_id): {str(doc_id): float(score) for doc_id, score in documents.items()}
@@ -132,21 +129,8 @@ def parse_models(values: list[str] | None) -> dict[str, str]:
     return models
 
 
-def validate_args(args: argparse.Namespace, splade_models: dict[str, str]) -> None:
-    if args.top_terms != -1 and args.top_terms < 1:
-        raise ValueError("--top-terms must be -1 or a positive integer.")
-    if args.query_limit is not None and args.query_limit < 1:
-        raise ValueError("--query-limit must be a positive integer.")
-    if not args.skip_bm25 and args.bm25_label in splade_models:
-        raise ValueError(f"BM25 label collides with a SPLADE model label: {args.bm25_label}")
-
-
-def ranked_documents(results: dict[str, float], top_documents: int) -> list[tuple[str, float]]:
-    return sorted(results.items(), key=lambda item: item[1], reverse=True)[:top_documents]
-
-
 def displayed_documents(results: dict[str, float], gold_ids: set[str]) -> list[dict[str, Any]]:
-    ranked = ranked_documents(results, len(results))
+    ranked = sorted(results.items(), key=lambda item: item[1], reverse=True)
     ranked_lookup = {
         doc_id: {"rank": rank, "score": score}
         for rank, (doc_id, score) in enumerate(ranked, start=1)
@@ -181,7 +165,10 @@ def ndcg_at_k(results: dict[str, float], gold_ids: set[str], k: int) -> float:
     if not gold_ids:
         return 0.0
 
-    ranked_ids = [doc_id for doc_id, _ in ranked_documents(results, k)]
+    ranked_ids = [
+        doc_id
+        for doc_id, _ in sorted(results.items(), key=lambda item: item[1], reverse=True)[:k]
+    ]
     dcg = sum(
         1.0 / math.log2(rank + 2)
         for rank, doc_id in enumerate(ranked_ids)
@@ -192,12 +179,12 @@ def ndcg_at_k(results: dict[str, float], gold_ids: set[str], k: int) -> float:
     return dcg / idcg if idcg else 0.0
 
 
-def limit_expansion(expansion: Expansion, top_terms: int) -> Expansion:
+def sort_expansion(expansion: Expansion) -> Expansion:
     expansion.sort(key=lambda item: (-float(item["weight"]), str(item["token"])))
-    return expansion if top_terms == -1 else expansion[:top_terms]
+    return expansion
 
 
-def tensor_expansion(vector: Any, vocab: dict[int, str], top_terms: int) -> Expansion:
+def tensor_expansion(vector: Any, vocab: dict[int, str]) -> Expansion:
     if not torch.is_tensor(vector):
         vector = torch.as_tensor(vector)
 
@@ -217,28 +204,26 @@ def tensor_expansion(vector: Any, vocab: dict[int, str], top_terms: int) -> Expa
         for index, weight in active
         if float(weight) > 0
     ]
-    return limit_expansion(expansion, top_terms)
+    return sort_expansion(expansion)
 
 
 def encode_splade_texts(
     texts: dict[str, str],
-    model_name: str,
+    model: SparseEncoder,
+    model_label: str,
     mode: str,
-    top_terms: int,
     batch_size: int = 16,
 ) -> dict[str, Expansion]:
     if not texts:
         return {}
 
-    model = SparseEncoder(model_name, device="cuda")
-    model.eval()
     vocab = {index: token for token, index in model.tokenizer.get_vocab().items()}
     text_ids = list(texts)
     encoded: dict[str, Expansion] = {}
 
     for start in track(
         range(0, len(text_ids), batch_size),
-        description=f"[SPLADE {mode}] {model_name}",
+        description=f"[SPLADE {mode}] {model_label}",
     ):
         batch_ids = text_ids[start : start + batch_size]
         batch_texts = [texts[text_id] for text_id in batch_ids]
@@ -249,26 +234,16 @@ def encode_splade_texts(
                 vectors = model.encode_document(batch_texts, convert_to_sparse_tensor=False)
 
         for text_id, vector in zip(batch_ids, vectors, strict=True):
-            encoded[text_id] = tensor_expansion(vector, vocab, top_terms)
+            encoded[text_id] = tensor_expansion(vector, vocab)
 
-    del model
     return encoded
 
 
-def build_bm25_index(corpus: dict[str, str]) -> tuple[bm25s.BM25, list[str]]:
-    corpus_ids = list(corpus)
-    corpus_tokens = bm25s.tokenize([corpus[doc_id] for doc_id in corpus_ids])
-    retriever = bm25s.BM25()
-    retriever.index(corpus_tokens)
-    return retriever, corpus_ids
-
-
-def bm25_query_expansion(text: str, retriever: bm25s.BM25, top_terms: int) -> Expansion:
+def bm25_query_expansion(text: str, retriever: bm25s.BM25) -> Expansion:
     tokens = bm25s.tokenize([text], return_ids=False, show_progress=False)[0]
     counts = Counter(token for token in tokens if token in retriever.vocab_dict)
-    return limit_expansion(
-        [{"token": token, "weight": float(weight)} for token, weight in counts.items()],
-        top_terms,
+    return sort_expansion(
+        [{"token": token, "weight": float(weight)} for token, weight in counts.items()]
     )
 
 
@@ -276,7 +251,6 @@ def bm25_document_expansions(
     retriever: bm25s.BM25,
     corpus_ids: list[str],
     selected_doc_ids: set[str],
-    top_terms: int,
 ) -> dict[str, Expansion]:
     selected_positions = {
         position: doc_id
@@ -301,7 +275,7 @@ def bm25_document_expansions(
                 expansions[doc_id].append({"token": token, "weight": float(data[offset])})
 
     return {
-        doc_id: limit_expansion(expansions.get(doc_id, []), top_terms)
+        doc_id: sort_expansion(expansions.get(doc_id, []))
         for doc_id in selected_doc_ids
     }
 
@@ -324,7 +298,11 @@ def selected_query_ids(
 
 def generate_comparison(args: argparse.Namespace) -> dict[str, Any]:
     splade_models = parse_models(args.splade_model)
-    validate_args(args, splade_models)
+    if args.query_limit is not None and args.query_limit < 1:
+        raise ValueError("--query-limit must be a positive integer.")
+    if not args.skip_bm25 and args.bm25_label in splade_models:
+        raise ValueError(f"BM25 label collides with a SPLADE model label: {args.bm25_label}")
+
     model_names = dict(splade_models)
     if not args.skip_bm25:
         model_names[args.bm25_label] = args.bm25_model_name
@@ -376,32 +354,59 @@ def generate_comparison(args: argparse.Namespace) -> dict[str, Any]:
     selected_query_texts = {query_id: queries[query_id] for query_id in query_ids}
 
     for label, model_name in splade_models.items():
+        mlm_transformer = Transformer(
+            model_name,
+            transformer_task="fill-mask",
+        )
+        splade_pooling = SpladePooling(
+            pooling_strategy="max",
+            embedding_dimension=mlm_transformer.get_embedding_dimension(),
+        )
+        query_modules = (
+            [mlm_transformer, splade_pooling]
+            if args.query_expansion
+            else [
+                SparseStaticEmbedding(
+                    tokenizer=mlm_transformer.tokenizer,
+                    frozen=True,
+                )
+            ]
+        )
+        router = Router.for_query_document(
+            query_modules=query_modules,
+            document_modules=[mlm_transformer, splade_pooling],
+        )
+        model = SparseEncoder(modules=[router], device="cuda")
+        model.eval()
         selected_document_texts = {
             doc_id: corpus[doc_id] for doc_id in selected_docs_by_model[label]
         }
         document_expansions[label] = encode_splade_texts(
             selected_document_texts,
+            model,
             model_name,
             mode="doc",
-            top_terms=args.top_terms,
         )
         query_representations[label] = encode_splade_texts(
             selected_query_texts,
+            model,
             model_name,
             mode="query",
-            top_terms=args.top_terms,
         )
+        del model
 
     if not args.skip_bm25:
-        retriever, corpus_ids = build_bm25_index(corpus)
+        corpus_ids = list(corpus)
+        corpus_tokens = bm25s.tokenize([corpus[doc_id] for doc_id in corpus_ids])
+        retriever = bm25s.BM25()
+        retriever.index(corpus_tokens)
         document_expansions[args.bm25_label] = bm25_document_expansions(
             retriever,
             corpus_ids,
             selected_docs_by_model[args.bm25_label],
-            args.top_terms,
         )
         query_representations[args.bm25_label] = {
-            query_id: bm25_query_expansion(queries[query_id], retriever, args.top_terms)
+            query_id: bm25_query_expansion(queries[query_id], retriever)
             for query_id in query_ids
         }
 
