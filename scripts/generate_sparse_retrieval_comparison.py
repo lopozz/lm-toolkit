@@ -145,6 +145,38 @@ def ranked_documents(results: dict[str, float], top_documents: int) -> list[tupl
     return sorted(results.items(), key=lambda item: item[1], reverse=True)[:top_documents]
 
 
+def displayed_documents(results: dict[str, float], gold_ids: set[str]) -> list[dict[str, Any]]:
+    ranked = ranked_documents(results, len(results))
+    ranked_lookup = {
+        doc_id: {"rank": rank, "score": score}
+        for rank, (doc_id, score) in enumerate(ranked, start=1)
+    }
+    top_documents = [
+        {
+            "doc_id": doc_id,
+            "rank": rank,
+            "score": score,
+            "is_extra_gold": False,
+        }
+        for rank, (doc_id, score) in enumerate(ranked[:DISPLAY_DOCUMENTS], start=1)
+    ]
+    top_ids = {document["doc_id"] for document in top_documents}
+    missing_gold = sorted(
+        gold_ids - top_ids,
+        key=lambda doc_id: (ranked_lookup.get(doc_id, {}).get("rank", math.inf), doc_id),
+    )
+    extra_gold = [
+        {
+            "doc_id": doc_id,
+            "rank": ranked_lookup.get(doc_id, {}).get("rank"),
+            "score": ranked_lookup.get(doc_id, {}).get("score"),
+            "is_extra_gold": True,
+        }
+        for doc_id in missing_gold
+    ]
+    return extra_gold + top_documents
+
+
 def ndcg_at_k(results: dict[str, float], gold_ids: set[str], k: int) -> float:
     if not gold_ids:
         return 0.0
@@ -198,7 +230,7 @@ def encode_splade_texts(
     if not texts:
         return {}
 
-    model = SparseEncoder(model_name, device="cpu")
+    model = SparseEncoder(model_name, device="cuda")
     model.eval()
     vocab = {index: token for token, index in model.tokenizer.get_vocab().items()}
     text_ids = list(texts)
@@ -313,20 +345,20 @@ def generate_comparison(args: argparse.Namespace) -> dict[str, Any]:
     if missing_queries:
         raise ValueError(f"Query IDs missing from the dataset: {missing_queries}")
 
-    ranked_by_model = {
+    displayed_by_model = {
         label: {
-            query_id: ranked_documents(model_predictions[query_id], DISPLAY_DOCUMENTS)
+            query_id: displayed_documents(model_predictions[query_id], gold_ids.get(query_id, set()))
             for query_id in query_ids
         }
         for label, model_predictions in predictions.items()
     }
     selected_docs_by_model = {
         label: {
-            doc_id
-            for ranked_results in ranked_queries.values()
-            for doc_id, _ in ranked_results
+            document["doc_id"]
+            for displayed_documents_for_query in displayed_queries.values()
+            for document in displayed_documents_for_query
         }
-        for label, ranked_queries in ranked_by_model.items()
+        for label, displayed_queries in displayed_by_model.items()
     }
     missing_docs = sorted(
         {
@@ -339,7 +371,7 @@ def generate_comparison(args: argparse.Namespace) -> dict[str, Any]:
     if missing_docs:
         raise ValueError(f"Retrieved document IDs missing from the dataset: {missing_docs[:10]}")
 
-    query_expansions: dict[str, dict[str, Expansion]] = {}
+    query_representations: dict[str, dict[str, Expansion]] = {}
     document_expansions: dict[str, dict[str, Expansion]] = {}
     selected_query_texts = {query_id: queries[query_id] for query_id in query_ids}
 
@@ -347,31 +379,31 @@ def generate_comparison(args: argparse.Namespace) -> dict[str, Any]:
         selected_document_texts = {
             doc_id: corpus[doc_id] for doc_id in selected_docs_by_model[label]
         }
-        query_expansions[label] = encode_splade_texts(
-            selected_query_texts,
-            model_name,
-            mode="query",
-            top_terms=args.top_terms,
-        )
         document_expansions[label] = encode_splade_texts(
             selected_document_texts,
             model_name,
             mode="doc",
             top_terms=args.top_terms,
         )
+        query_representations[label] = encode_splade_texts(
+            selected_query_texts,
+            model_name,
+            mode="query",
+            top_terms=args.top_terms,
+        )
 
     if not args.skip_bm25:
         retriever, corpus_ids = build_bm25_index(corpus)
-        query_expansions[args.bm25_label] = {
-            query_id: bm25_query_expansion(queries[query_id], retriever, args.top_terms)
-            for query_id in query_ids
-        }
         document_expansions[args.bm25_label] = bm25_document_expansions(
             retriever,
             corpus_ids,
             selected_docs_by_model[args.bm25_label],
             args.top_terms,
         )
+        query_representations[args.bm25_label] = {
+            query_id: bm25_query_expansion(queries[query_id], retriever, args.top_terms)
+            for query_id in query_ids
+        }
 
     output_queries = []
     for query_id in query_ids:
@@ -379,17 +411,15 @@ def generate_comparison(args: argparse.Namespace) -> dict[str, Any]:
         for label in model_names:
             documents = [
                 {
-                    "rank": rank,
-                    "doc_id": doc_id,
-                    "score": score,
-                    "text": corpus[doc_id],
-                    "expansion": document_expansions[label][doc_id],
+                    **document,
+                    "text": corpus[document["doc_id"]],
+                    "expansion": document_expansions[label][document["doc_id"]],
                 }
-                for rank, (doc_id, score) in enumerate(ranked_by_model[label][query_id], start=1)
+                for document in displayed_by_model[label][query_id]
             ]
             models[label] = {
                 "ndcg_at_10": ndcg_at_k(predictions[label][query_id], gold_ids.get(query_id, set()), NDCG_K),
-                "query_expansion": query_expansions[label][query_id],
+                "query_representation": query_representations[label][query_id],
                 "documents": documents,
             }
 

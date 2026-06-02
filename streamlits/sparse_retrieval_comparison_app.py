@@ -10,11 +10,12 @@ Expected JSON shape:
     "models": {
       "bm25": {
         "ndcg_at_10": 0.75,
-        "query_expansion": [{"token": "term", "weight": 1.0}],
+        "query_representation": [{"token": "term", "weight": 1.0}],
         "documents": [{
           "rank": 1,
           "doc_id": "document-id",
           "score": 2.3,
+          "is_extra_gold": false,
           "text": "document text",
           "expansion": [{"token": "term", "weight": 0.8}]
         }]
@@ -79,18 +80,38 @@ def load_queries(path_str: str) -> list[dict[str, Any]]:
             ndcg = float(model_data["ndcg_at_10"])
             if not 0.0 <= ndcg <= 1.0:
                 raise ValueError(f"Invalid nDCG@10 for model '{model_name}'. Regenerate the JSON.")
+            if "query_representation" not in model_data:
+                raise ValueError(
+                    f"Missing query representation for model '{model_name}'. "
+                    "Regenerate the JSON with the latest exporter."
+                )
             documents = model_data.get("documents")
-            if not isinstance(documents, list) or len(documents) > DISPLAY_DOCUMENTS:
+            if not isinstance(documents, list):
                 raise ValueError(
                     f"Invalid document list for model '{model_name}'. "
                     "Regenerate the JSON with the latest exporter."
                 )
-            expected_ranks = list(range(1, len(documents) + 1))
-            if [document.get("rank") for document in documents] != expected_ranks:
+            if any("is_extra_gold" not in document for document in documents):
                 raise ValueError(
-                    f"Invalid document ranks for model '{model_name}'. "
+                    f"Missing gold-document metadata for model '{model_name}'. "
                     "Regenerate the JSON with the latest exporter."
                 )
+            extra_gold = [document for document in documents if document.get("is_extra_gold", False)]
+            top_documents = [document for document in documents if not document.get("is_extra_gold", False)]
+            if documents != extra_gold + top_documents or len(top_documents) > DISPLAY_DOCUMENTS:
+                raise ValueError(
+                    f"Invalid document order for model '{model_name}'. "
+                    "Regenerate the JSON with the latest exporter."
+                )
+            expected_ranks = list(range(1, len(top_documents) + 1))
+            if [document.get("rank") for document in top_documents] != expected_ranks:
+                raise ValueError(f"Invalid top-document ranks for model '{model_name}'. Regenerate the JSON.")
+            query_gold_ids = {str(doc_id) for doc_id in query["gold_ids"]}
+            if any(str(document.get("doc_id")) not in query_gold_ids for document in extra_gold):
+                raise ValueError(f"Invalid extra gold document for model '{model_name}'. Regenerate the JSON.")
+            doc_ids = [str(document.get("doc_id")) for document in documents]
+            if len(doc_ids) != len(set(doc_ids)):
+                raise ValueError(f"Duplicate documents for model '{model_name}'. Regenerate the JSON.")
 
     return queries
 
@@ -263,17 +284,19 @@ def render_document(
     query_tokens: set[str] | None,
     top_n: int,
 ) -> None:
-    rank = document.get("rank", "?")
+    rank = document.get("rank")
     doc_id = document.get("doc_id", "?")
-    score = float(document.get("score", 0.0))
+    score = document.get("score")
     text = str(document.get("text", ""))
+    rank_text = str(rank) if rank is not None else "not in saved predictions"
+    score_text = f"{float(score):.4f}" if score is not None else "not available"
     is_gold = str(doc_id) in gold_ids
     card_class = "document-card gold-document" if is_gold else "document-card"
     gold_badge = '<span class="gold-badge">Gold</span>' if is_gold else ""
     st.markdown(
         f"""
         <div class="{card_class}">
-          <div class="document-meta">Rank {rank} · document {escape_html(str(doc_id))} · score {score:.4f}{gold_badge}</div>
+          <div class="document-meta">Rank {escape_html(rank_text)} · document {escape_html(str(doc_id))} · score {escape_html(score_text)}{gold_badge}</div>
           <div class="document-text">{escape_html(text)}</div>
         </div>
         """,
@@ -303,16 +326,11 @@ def render_model(
         """,
         unsafe_allow_html=True,
     )
+    query_representation = model_data["query_representation"]
+    query_tokens = expansion_tokens(query_representation)
     st.markdown("#### Query representation")
-    query_expansion = model_data.get("query_expansion", [])
-    query_tokens = expansion_tokens(query_expansion)
-    if intersection_only:
-        document_tokens = set().union(
-            *(expansion_tokens(document.get("expansion", [])) for document in model_data["documents"])
-        )
-        query_expansion = keep_tokens(query_expansion, document_tokens)
     st.markdown(
-        chip_html(query_expansion, caption="Query token weights", limit=top_n),
+        chip_html(query_representation, caption="Query token weights", limit=top_n),
         unsafe_allow_html=True,
     )
 
@@ -321,7 +339,6 @@ def render_model(
         st.caption("No retrieved documents available.")
         return
 
-    st.markdown("#### Top retrieved documents")
     for document in documents:
         render_document(
             document,
@@ -353,15 +370,6 @@ def main() -> None:
         st.header("Controls")
         data_path = st.text_input("JSON path", value=str(DEFAULT_DATA_PATH))
         top_n = st.slider("Visible terms", min_value=5, max_value=50, value=18)
-        intersection_only = st.toggle(
-            "Show shared tokens only",
-            help=(
-                "Show only exact token matches shared by each model's query and displayed documents. "
-                "The query view keeps tokens shared with at least one displayed document. "
-                "The intersection is computed from all tokens stored in the JSON before the "
-                "'Visible terms' limit is applied."
-            ),
-        )
         search_query = st.text_input("Search query", placeholder="Filter by query text")
 
     data_file = Path(data_path)
@@ -406,6 +414,15 @@ def main() -> None:
         )
         left_range = st.slider(f"Left column: {left_model}", 0.0, 1.0, (0.0, 1.0), step=0.01)
         right_range = st.slider(f"Right column: {right_model}", 0.0, 1.0, (0.0, 1.0), step=0.01)
+        intersection_only = st.toggle(
+            "Show shared document tokens only",
+            help=(
+                "Filter each document representation to exact token matches shared with that model's query. "
+                "The query representation remains unchanged. "
+                "The intersection is computed from all tokens stored in the JSON before the "
+                "'Visible terms' limit is applied."
+            ),
+        )
 
     def matches_score_filters(query: dict[str, Any]) -> bool:
         models = query["models"]
