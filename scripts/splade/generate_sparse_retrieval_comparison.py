@@ -42,7 +42,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("streamlits/sparse_retrieval_comparison.json"),
+        default=Path("streamlits/splade/sparse_retrieval_comparison.json"),
     )
     parser.add_argument(
         "--query-limit",
