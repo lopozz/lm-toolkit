@@ -1,0 +1,84 @@
+name: student_courses
+
+tool:
+  type: function
+  function:
+    name: recupera_corsi_disponibili
+    description: >
+      Recupera l'elenco dei corsi a cui uno studente è abilitato nel portale
+      studenti. Usare solo quando l'utente fornisce il proprio nome e cognome
+      o chiede esplicitamente di verificare i corsi disponibili per uno studente
+      identificato.
+    parameters:
+      type: object
+      properties:
+        nome_studente:
+          type: string
+          description: Nome e cognome completo dello studente.
+      required:
+        - nome_studente
+
+system_prompt: >
+  Sei un assistente del portale studenti.
+
+  Chiama lo strumento recupera_corsi_disponibili solo quando devi verificare
+  i corsi disponibili per uno studente identificato da nome e cognome.
+
+  Non chiamare lo strumento per domande generali sui corsi, spiegazioni sul
+  funzionamento del portale, richieste di scrittura, casi in cui l'utente
+  fornisce solo il nome o solo il cognome, oppure domande ipotetiche o vaghe.
+
+  Se manca il nome completo dello studente, chiedi gentilmente nome e cognome.
+
+should_call_tool:
+  - text: "Sono Marco Rossi."
+    expected_arguments:
+      nome_studente: "Marco Rossi"
+
+  - text: "Mi chiamo Giulia Bianchi."
+    expected_arguments:
+      nome_studente: "Giulia Bianchi"
+
+  - text: "Il mio nome è Luca Verdi, vorrei sapere a quali corsi posso accedere."
+    expected_arguments:
+      nome_studente: "Luca Verdi"
+
+  - text: "Puoi controllare i corsi disponibili per Sara Esposito?"
+    expected_arguments:
+      nome_studente: "Sara Esposito"
+
+  - text: "Verifica per favore i corsi abilitati per Andrea Romano."
+    expected_arguments:
+      nome_studente: "Andrea Romano"
+
+  - text: "Sono Francesca Marino, quali corsi risultano disponibili per me?"
+    expected_arguments:
+      nome_studente: "Francesca Marino"
+
+  - text: "Cerca nel portale i corsi a cui è abilitato Matteo Conti."
+    expected_arguments:
+      nome_studente: "Matteo Conti"
+
+  - text: "Vorrei sapere se io, Elena Ricci, posso accedere a qualche corso."
+    expected_arguments:
+      nome_studente: "Elena Ricci"
+
+  - text: "Controlla le mie abilitazioni: mi chiamo Davide Greco."
+    expected_arguments:
+      nome_studente: "Davide Greco"
+
+  - text: "Recupera i corsi disponibili per Chiara Ferri."
+    expected_arguments:
+      nome_studente: "Chiara Ferri"
+
+should_not_call_tool:
+  - text: "Mi chiamo Marco Rossi."
+  - text: "Sono Rossi."
+  - text: "Come funziona l'accesso ai corsi?"
+  - text: "Quali corsi offre l'università questo semestre?"
+  - text: "Vorrei iscrivermi ad Analisi Matematica 1."
+  - text: "Puoi spiegarmi cosa significa essere abilitato a un corso?"
+  - text: "Non ricordo se sono abilitato ai corsi."
+  - text: "Marco Rossi è un nome molto comune?"
+  - text: "Scrivi un messaggio gentile per chiedere i codici di iscrizione."
+  - text: "Se ti dico il mio nome, puoi vedere i corsi disponibili?"
