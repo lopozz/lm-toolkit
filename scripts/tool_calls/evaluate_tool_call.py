@@ -1,11 +1,51 @@
-import argparse
-import json
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Any
+"""
+Evaluate whether an OpenAI-compatible chat model uses tools correctly.
 
+The script loads a YAML config describing one tool-calling scenario: the tool
+schema, the system prompt, examples where the tool should be called, and hard
+negative examples where the model should answer without tools.
+
+For each test case, it sends a chat completion request with `tool_choice="auto"`
+and checks whether the expected function appears in `message.tool_calls`.
+Positive cases may also define expected arguments, allowing the script to verify
+both tool selection and argument extraction.
+
+The goal is to measure whether a model can distinguish between requests that
+require an external action or retrieval step and requests that should be handled
+directly in natural language.
+
+Typical usage:
+
+    python3 scripts/tool_calls/evaluate_tool_call.py \\
+      --model mistralai/Ministral-3-3B-Instruct-2512 \\
+      --config configs/tools/student_courses.yaml
+
+Use `--debug` to print the raw assistant content, structured tool calls, and
+parsed arguments for each request.
+
+Important:
+    When evaluating tool calling through vLLM, the server launch command must
+    include the parameters required for structured tool-call generation and
+    parsing. Passing `tools=[...]` and `tool_choice="auto"` from the client is
+    not enough if the vLLM server was not started with tool-calling support.
+
+    For Mistral/Ministral models, include at least:
+
+        --enable-auto-tool-choice
+        --tool-call-parser mistral
+
+    See https://docs.vllm.ai/en/stable/features/tool_calling/ for more info
+    on funciton calling with vLLM.
+"""
+
+import json
 import yaml
+import argparse
+
+from typing import Any
+from pathlib import Path
 from openai import OpenAI
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
