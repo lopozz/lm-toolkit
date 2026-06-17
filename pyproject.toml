@@ -8,8 +8,11 @@ dependencies = [
     "accelerate>=1.13.0",
     "mteb[bm25s,xet]>=2.12.16",
     "openai>=2.40.0",
+    "pyyaml>=6.0.0",
     "ruff>=0.15.10",
     "sentence-transformers>=5.4.1",
     "streamlit>=1.45.0",
 ]
 
+[tool.setuptools.packages.find]
+include = ["lm_toolkit*"]
