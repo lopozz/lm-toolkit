@@ -36,27 +36,26 @@ Important:
 
     See https://docs.vllm.ai/en/stable/features/tool_calling/ for more info
     on funciton calling with vLLM.
+    See https://github.com/ggml-org/llama.cpp/blob/master/docs/function-calling.md for more info
+    on funciton calling with LlamaCpp.
 """
 
 import argparse
 
-from openai import OpenAI
-from lm_toolkit.benchmarks.tool_call import (
-    print_result,
-    build_test_cases,
-    load_config,
-    ask_model,
-)
+import lm_toolkit
+
+from lm_toolkit.backends import OpenAIBackend
+from lm_toolkit.benchmarks.tool_call import load_config
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Evaluate whether a local vLLM model calls a specified tool."
+        description="Evaluate whether an OpenAI-compatible model calls a specified tool."
     )
     parser.add_argument(
         "--base-url",
         default="http://localhost:8000/v1",
-        help="OpenAI-compatible vLLM endpoint.",
+        help="OpenAI-compatible endpoint.",
     )
     parser.add_argument(
         "--api-key",
@@ -66,7 +65,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model",
         required=True,
-        help="Model name served by vLLM.",
+        help="Model name served by the backend.",
     )
     parser.add_argument(
         "--config",
@@ -91,70 +90,18 @@ def main() -> None:
     args = parse_args()
 
     config = load_config(args.config)
-    client = OpenAI(api_key=args.api_key, base_url=args.base_url)
+    backend = OpenAIBackend(base_url=args.base_url, api_key=args.api_key)
 
-    tool = config["tool"]
-    system_prompt = config["system_prompt"]
-    test_cases = build_test_cases(config)
-
-    positives_total = 0
-    positives_passed = 0
-    negatives_total = 0
-    negatives_passed = 0
-    argument_total = 0
-    argument_passed = 0
-
-    for index, test_case in enumerate(test_cases, start=1):
-        (
-            did_call_expected_tool,
-            did_match_arguments,
-            called_tool_names,
-            actual_arguments,
-        ) = ask_model(
-            client=client,
-            model=args.model,
-            system_prompt=system_prompt,
-            tool=tool,
-            test_case=test_case,
-            temperature=args.temperature,
-            debug=args.debug,
-        )
-
-        call_ok = did_call_expected_tool == test_case.should_call
-
-        if test_case.should_call:
-            positives_total += 1
-            positives_passed += int(call_ok)
-
-            if test_case.expected_arguments is not None:
-                argument_total += 1
-                argument_passed += int(did_call_expected_tool and did_match_arguments)
-        else:
-            negatives_total += 1
-            negatives_passed += int(call_ok)
-
-        print_result(
-            index=index,
-            test_case=test_case,
-            did_call_expected_tool=did_call_expected_tool,
-            did_match_arguments=did_match_arguments,
-            called_tool_names=called_tool_names,
-            actual_arguments=actual_arguments,
-        )
-
-    total = positives_total + negatives_total
-    passed = positives_passed + negatives_passed
-
-    print()
-    print("Summary")
-    print(f"Config:          {args.config}")
-    print(f"Tool:            {tool['function']['name']}")
-    print(f"Should call:     {positives_passed}/{positives_total} passed")
-    print(f"Should not call: {negatives_passed}/{negatives_total} passed")
-    print(f"Total calls:     {passed}/{total} passed")
-
-    if argument_total:
-        print(f"Arguments:       {argument_passed}/{argument_total} passed")
+    lm_toolkit.evaluate(
+        model=args.model,
+        tasks=[config],
+        backend=backend,
+        benchmark="tool_call",
+        kwargs={
+            "temperature": args.temperature,
+            "debug": args.debug,
+        },
+    )
 
 
 if __name__ == "__main__":

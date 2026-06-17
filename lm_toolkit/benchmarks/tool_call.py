@@ -16,8 +16,9 @@ import json
 
 from typing import Any
 from pathlib import Path
-from openai import OpenAI
 from dataclasses import dataclass
+
+from lm_toolkit.backends import LMBackend
 
 
 @dataclass(frozen=True)
@@ -114,69 +115,6 @@ def arguments_match(
     return True
 
 
-def ask_model(
-    client: OpenAI,
-    model: str,
-    system_prompt: str,
-    tool: dict[str, Any],
-    test_case: TestCase,
-    temperature: float,
-    debug: bool,
-) -> tuple[bool, bool, list[str], dict[str, Any]]:
-    response = client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": test_case.text},
-        ],
-        tools=[tool],
-        tool_choice="auto",
-        temperature=temperature,
-    )
-
-    message = response.choices[0].message
-    tool_calls = message.tool_calls or []
-
-    expected_tool_name = tool["function"]["name"]
-    called_tool_names = [tool_call.function.name for tool_call in tool_calls]
-
-    matching_tool_call = next(
-        (
-            tool_call
-            for tool_call in tool_calls
-            if tool_call.function.name == expected_tool_name
-        ),
-        None,
-    )
-
-    did_call_expected_tool = matching_tool_call is not None
-
-    actual_arguments: dict[str, Any] = {}
-    did_match_arguments = True
-
-    if matching_tool_call is not None:
-        actual_arguments = parse_tool_arguments(matching_tool_call.function.arguments)
-        did_match_arguments = arguments_match(
-            actual_arguments=actual_arguments,
-            expected_arguments=test_case.expected_arguments,
-        )
-
-    if debug:
-        print()
-        print("DEBUG")
-        print("content:", message.content)
-        print("tool_calls:", tool_calls)
-        print("actual_arguments:", actual_arguments)
-        print()
-
-    return (
-        did_call_expected_tool,
-        did_match_arguments,
-        called_tool_names,
-        actual_arguments,
-    )
-
-
 def print_result(
     index: int,
     test_case: TestCase,
@@ -199,3 +137,135 @@ def print_result(
         f"{index:02d}. {status} | expected={expected:<7} actual={actual:<7} "
         f"called={called} args={args} | {test_case.text}"
     )
+
+
+def evaluate_tool_call(
+    model: str,
+    tasks: list[dict[str, Any]],
+    backend: LMBackend,
+    temperature: float = 0.0,
+    debug: bool = False,
+) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+
+    for task in tasks:
+        tool = task["tool"]
+        system_prompt = task["system_prompt"]
+        test_cases = build_test_cases(task)
+        task_name = task.get("name", tool["function"]["name"])
+
+        positives_total = 0
+        positives_passed = 0
+        negatives_total = 0
+        negatives_passed = 0
+        argument_total = 0
+        argument_passed = 0
+
+        for index, test_case in enumerate(test_cases, start=1):
+            response = backend.chat_completion(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": test_case.text},
+                ],
+                tools=[tool],
+                tool_choice="auto",
+                temperature=temperature,
+            )
+
+            message = response.choices[0].message
+            tool_calls = message.tool_calls or []
+
+            expected_tool_name = tool["function"]["name"]
+            called_tool_names = [tool_call.function.name for tool_call in tool_calls]
+
+            matching_tool_call = next(
+                (
+                    tool_call
+                    for tool_call in tool_calls
+                    if tool_call.function.name == expected_tool_name
+                ),
+                None,
+            )
+
+            did_call_expected_tool = matching_tool_call is not None
+            actual_arguments: dict[str, Any] = {}
+            did_match_arguments = True
+
+            if matching_tool_call is not None:
+                actual_arguments = parse_tool_arguments(
+                    matching_tool_call.function.arguments
+                )
+                did_match_arguments = arguments_match(
+                    actual_arguments=actual_arguments,
+                    expected_arguments=test_case.expected_arguments,
+                )
+
+            if debug:
+                print()
+                print("DEBUG")
+                print("content:", message.content)
+                print("tool_calls:", tool_calls)
+                print("actual_arguments:", actual_arguments)
+                print()
+
+            call_ok = did_call_expected_tool == test_case.should_call
+
+            if test_case.should_call:
+                positives_total += 1
+                positives_passed += int(call_ok)
+
+                if test_case.expected_arguments is not None:
+                    argument_total += 1
+                    argument_passed += int(did_call_expected_tool and did_match_arguments)
+            else:
+                negatives_total += 1
+                negatives_passed += int(call_ok)
+
+            print_result(
+                index=index,
+                test_case=test_case,
+                did_call_expected_tool=did_call_expected_tool,
+                did_match_arguments=did_match_arguments,
+                called_tool_names=called_tool_names,
+                actual_arguments=actual_arguments,
+            )
+
+        total = positives_total + negatives_total
+        passed = positives_passed + negatives_passed
+
+        print()
+        print("Summary")
+        print(f"Task:            {task_name}")
+        print(f"Tool:            {tool['function']['name']}")
+        print(f"Should call:     {positives_passed}/{positives_total} passed")
+        print(f"Should not call: {negatives_passed}/{negatives_total} passed")
+        print(f"Total calls:     {passed}/{total} passed")
+
+        if argument_total:
+            print(f"Arguments:       {argument_passed}/{argument_total} passed")
+
+        results.append(
+            {
+                "task": task_name,
+                "tool": tool["function"]["name"],
+                "should_call": {
+                    "passed": positives_passed,
+                    "total": positives_total,
+                },
+                "should_not_call": {
+                    "passed": negatives_passed,
+                    "total": negatives_total,
+                },
+                "total": {
+                    "passed": passed,
+                    "total": total,
+                },
+                "arguments": {
+                    "passed": argument_passed,
+                    "total": argument_total,
+                },
+            }
+        )
+
+    return results
