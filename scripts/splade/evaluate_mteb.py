@@ -72,64 +72,26 @@ retrieval evaluation while preserving a directory and result structure close to
 the standard MTEB workflow.
 """
 
-import argparse
 import json
 import time
 import yaml
 import mteb
+import argparse
 
-from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from datasets import load_dataset
-
 from mteb.models import ModelMeta
 from mteb.models.model_meta import ScoringFunction
-from sentence_transformers import SparseEncoder, SparseEncoderModelCardData
+from importlib.metadata import PackageNotFoundError, version
+from sentence_transformers import SparseEncoder
 from sentence_transformers.sparse_encoder.evaluation import (
     SparseInformationRetrievalEvaluator,
 )
-from sentence_transformers.sentence_transformer.modules import Router, Transformer
-from sentence_transformers.sparse_encoder.modules import (
-    SpladePooling,
-    SparseStaticEmbedding,
-)
-
 
 SPARSE_MODELS = {
     "opensearch-project/opensearch-neural-sparse-encoding-multilingual-v1",
     "nickprock/splade-bert-base-italian-xxl-uncased-cv",
 }
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Evaluate retrieval models with MTEB.")
-    parser.add_argument(
-        "--model-name",
-        required=True,
-        help="Model name or Hugging Face repository.",
-    )
-    parser.add_argument(
-        "--config-path",
-        type=Path,
-        default=Path("./configs/ds/mteg-retrieval-ita.yml"),
-        help="Dataset task configuration YAML.",
-    )
-    parser.add_argument("--batch-size", type=int, default=16)
-    parser.add_argument("--overwrite-strategy", default="always")
-    parser.add_argument("--results-dir", type=Path, default=Path("./results"))
-    parser.add_argument(
-        "--no-query-expansion",
-        action="store_false",
-        dest="query_expansion",
-        help="Use lexical query tokens instead of SPLADE query expansion.",
-    )
-    parser.add_argument(
-        "--task-limit",
-        type=int,
-        default=1,
-        help="Maximum number of matching tasks to evaluate. Use -1 to evaluate all tasks.",
-    )
-    return parser.parse_args()
 
 
 def reshape_sparse_predictions(
@@ -244,12 +206,78 @@ def save_run_settings(
             settings_file.write(json.dumps(setting) + "\n")
 
 
+def is_sparse_model(model_name: str) -> bool:
+    model_path = Path(model_name)
+    return (
+        model_name in SPARSE_MODELS
+        or (model_path / "router_config.json").exists()
+        or (model_path / "modules.json").exists()
+    )
+
+
+def get_sparse_model_revision(model_name: str, model) -> str:
+    for module in model.modules():
+        auto_model = getattr(module, "auto_model", None)
+        config = getattr(auto_model, "config", None)
+        revision = getattr(config, "_commit_hash", None)
+        if revision:
+            return revision
+
+    model_path = Path(model_name)
+    if model_path.exists():
+        local_name = (
+            model_path.parent.name if model_path.name == "final" else model_path.name
+        )
+        return f"local-{local_name}"
+
+    return "unknown"
+
+
+def describe_sparse_query_expansion(model) -> str:
+    for module in model.modules():
+        sub_modules = getattr(module, "sub_modules", None)
+        if sub_modules is None or "query" not in sub_modules:
+            continue
+
+        query_module_names = [
+            query_module.__class__.__name__ for query_module in sub_modules["query"]
+        ]
+        has_query_expansion = "SpladePooling" in query_module_names
+        status = "enabled" if has_query_expansion else "disabled"
+        route = " -> ".join(query_module_names)
+        return f"Sparse query expansion by model configuration: {status} ({route})"
+
+    top_level_module_names = [module.__class__.__name__ for module in model]
+    if "SpladePooling" in top_level_module_names:
+        route = " -> ".join(top_level_module_names)
+        return f"Sparse query expansion by model configuration: enabled ({route})"
+
+    return "Sparse query expansion by model configuration: unknown"
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Evaluate retrieval models with MTEB.")
+    parser.add_argument(
+        "--model-name",
+        required=True,
+        help="Model name or Hugging Face repository.",
+    )
+    parser.add_argument(
+        "--config-path",
+        type=Path,
+        default=Path("./configs/ds/mteg-retrieval-ita.yml"),
+        help="Dataset task configuration YAML.",
+    )
+    parser.add_argument("--batch-size", type=int, default=16)
+    parser.add_argument("--overwrite-strategy", default="always")
+    parser.add_argument("--results-dir", type=Path, default=Path("./results"))
+    return parser.parse_args()
+
+
 def main():
     args = parse_args()
     if args.batch_size < 1:
         raise ValueError("--batch-size must be a positive integer.")
-    if args.task_limit != -1 and args.task_limit < 1:
-        raise ValueError("--task-limit must be -1 or a positive integer.")
 
     model_name = args.model_name
     batch_size = args.batch_size
@@ -272,12 +300,9 @@ def main():
         eval_splits=["test"],
     )
 
-    tasks = [t for t in tasks if t.metadata.name not in excluded]
+    tasks = [t for t in tasks if t.metadata.name not in excluded][1:]
 
-    if args.task_limit != -1:
-        tasks = tasks[: args.task_limit]
-
-    if model_name not in SPARSE_MODELS:
+    if not is_sparse_model(model_name):
         model = mteb.get_model(model_name)
         prediction_folder = args.results_dir / safe_model_name / "prediction_folder"
         prediction_folder.mkdir(parents=True, exist_ok=True)
@@ -294,40 +319,11 @@ def main():
         print(results)
 
     else:
-        mlm_transformer = Transformer(
-            model_name,
-            transformer_task="fill-mask",
-        )
-
-        splade_pooling = SpladePooling(
-            pooling_strategy="max",
-            embedding_dimension=mlm_transformer.get_embedding_dimension(),
-        )
-
-        query_modules = (
-            [mlm_transformer, splade_pooling]
-            if args.query_expansion
-            else [
-                SparseStaticEmbedding(
-                    tokenizer=mlm_transformer.tokenizer,
-                    frozen=True,
-                )
-            ]
-        )
-        router = Router.for_query_document(
-            query_modules=query_modules,
-            document_modules=[mlm_transformer, splade_pooling],
-        )
-
-        model = SparseEncoder(
-            modules=[router],
-            model_card_data=SparseEncoderModelCardData(
-                model_name=model_name,
-            ),
-        )
+        model = SparseEncoder(model_name)
+        print(describe_sparse_query_expansion(model))
         all_task_results = []
 
-        model_revision = mlm_transformer.auto_model.config._commit_hash
+        model_revision = get_sparse_model_revision(model_name, model)
         result_folder = args.results_dir / safe_model_name / model_revision
         result_folder.mkdir(parents=True, exist_ok=True)
         prediction_folder = args.results_dir / safe_model_name / "prediction_folder"
@@ -350,26 +346,29 @@ def main():
 
         for task in tasks:
             task_name = task.metadata.name
+            if task_name not in [
+                "MuPLeR-retrieval",
+                "WebFAQRetrieval",
+                "WikipediaRetrievalMultilingual",
+            ]:
+                raise ValueError(
+                    f"No sparse dataset mapping defined for task: {task_name}. "
+                    "Add dataset_path, corpus_name, queries_name, qrels_name, and id_column."
+                )
+
             split = "test"
 
             print(f"Evaluating sparse model on task: {task_name}")
 
             # Dataset mapping
             # Add more tasks here as needed.
-
-            if task_name == "MuPLeR-retrieval":
-                dataset_path = "mteb/MuPLeR-retrieval"
-                hf_subset = "it"
-                corpus_name = "it-corpus"
-                queries_name = "it-queries"
-                qrels_name = "it-qrels"
-                id_column = "id"
-
-            else:
-                raise ValueError(
-                    f"No sparse dataset mapping defined for task: {task_name}. "
-                    "Add dataset_path, corpus_name, queries_name, qrels_name, and id_column."
-                )
+            dataset_path = f"mteb/{task_name}"
+            lang_prefix = "ita" if task_name == "WebFAQRetrieval" else "it"
+            hf_subset = lang_prefix
+            corpus_name = f"{lang_prefix}-corpus"
+            queries_name = f"{lang_prefix}-queries"
+            qrels_name = f"{lang_prefix}-qrels"
+            id_column = "_id" if task_name == "WikipediaRetrievalMultilingual" else "id"
 
             corpus_ds = load_dataset(
                 path=dataset_path,
