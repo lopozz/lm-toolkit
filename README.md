@@ -1,4 +1,4 @@
-# 🤖 lm-toolkit
+ll   # 🤖 lm-toolkit
 Handy scripts to run, evaluate and train Language Models.
 
 ## 🛠 Installation & Setup
