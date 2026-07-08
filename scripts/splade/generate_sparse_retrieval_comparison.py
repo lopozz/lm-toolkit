@@ -20,7 +20,8 @@ from sentence_transformers.sparse_encoder.modules import (
 
 
 DEFAULT_MODELS = {
-    "opensearch_sparse": "opensearch-project/opensearch-neural-sparse-encoding-multilingual-v1",
+    # "opensearch_sparse": "opensearch-project/opensearch-neural-sparse-encoding-multilingual-v1",
+    "my_splade_it": "models/splade-bert-base-italian-xxl-uncased-cv",
     "splade_it": "nickprock/splade-bert-base-italian-xxl-uncased-cv",
 }
 DEFAULT_BM25_LABEL = "bm25"
@@ -354,29 +355,33 @@ def generate_comparison(args: argparse.Namespace) -> dict[str, Any]:
     selected_query_texts = {query_id: queries[query_id] for query_id in query_ids}
 
     for label, model_name in splade_models.items():
-        mlm_transformer = Transformer(
+        # mlm_transformer = Transformer(
+        #     model_name,
+        #     transformer_task="fill-mask",
+        # )
+        # splade_pooling = SpladePooling(
+        #     pooling_strategy="max",
+        #     embedding_dimension=mlm_transformer.get_embedding_dimension(),
+        # )
+        # query_modules = (
+        #     [mlm_transformer, splade_pooling]
+        #     if args.query_expansion
+        #     else [
+        #         SparseStaticEmbedding(
+        #             tokenizer=mlm_transformer.tokenizer,
+        #             frozen=True,
+        #         )
+        #     ]
+        # )
+        # router = Router.for_query_document(
+        #     query_modules=query_modules,
+        #     document_modules=[mlm_transformer, splade_pooling],
+        # )
+        # model = SparseEncoder(modules=[router], device="cuda")
+        model = SparseEncoder(
             model_name,
-            transformer_task="fill-mask",
+            device="cuda",
         )
-        splade_pooling = SpladePooling(
-            pooling_strategy="max",
-            embedding_dimension=mlm_transformer.get_embedding_dimension(),
-        )
-        query_modules = (
-            [mlm_transformer, splade_pooling]
-            if args.query_expansion
-            else [
-                SparseStaticEmbedding(
-                    tokenizer=mlm_transformer.tokenizer,
-                    frozen=True,
-                )
-            ]
-        )
-        router = Router.for_query_document(
-            query_modules=query_modules,
-            document_modules=[mlm_transformer, splade_pooling],
-        )
-        model = SparseEncoder(modules=[router], device="cuda")
         model.eval()
         selected_document_texts = {
             doc_id: corpus[doc_id] for doc_id in selected_docs_by_model[label]
