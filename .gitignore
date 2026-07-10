@@ -6,3 +6,4 @@ models/
 __pycache__
 sparse_retrieval_comparison.json
 *egg-info/
+wavs/
