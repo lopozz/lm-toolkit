@@ -450,7 +450,6 @@ def main():
                 "precision_at_5": sparse_scores.get("dot_precision@5"),
                 "precision_at_10": sparse_scores.get("dot_precision@10"),
                 "mrr_at_10": sparse_scores.get("dot_mrr@10"),
-                # MTEB retrieval tasks usually use nDCG@10 as main score.
                 "main_score": sparse_scores.get("dot_ndcg@10"),
                 "hf_subset": hf_subset,
                 "languages": task.metadata.eval_langs[hf_subset],

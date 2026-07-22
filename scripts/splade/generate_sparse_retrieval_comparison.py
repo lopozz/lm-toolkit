@@ -12,11 +12,6 @@ import torch
 from datasets import load_dataset
 from rich.progress import track
 from sentence_transformers import SparseEncoder
-from sentence_transformers.sentence_transformer.modules import Router, Transformer
-from sentence_transformers.sparse_encoder.modules import (
-    SparseStaticEmbedding,
-    SpladePooling,
-)
 
 
 DEFAULT_MODELS = {

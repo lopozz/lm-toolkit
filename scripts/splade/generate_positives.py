@@ -377,7 +377,7 @@ def main() -> None:
             print(f"[WARN] failed doc_id={doc_id}: {e}")
 
     print(f"Done. Kept={kept}, skipped={skipped}")
-    print(f"Wrote:")
+    print("Wrote:")
     print(f"  {corpus_path}")
     print(f"  {queries_path}")
     print(f"  {qrels_path}")

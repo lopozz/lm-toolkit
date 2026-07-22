@@ -8,25 +8,46 @@ client = OpenAI(
 messages = [
     {
         "role": "system",
-        "content": (
-        "Sei un assistente vocale dell'Hotel Aurora di Bologna. "
-        "Rispondi sempre in italiano con frasi brevi, naturali e adatte alla conversazione vocale. "
-        "Non usare emoji, asterischi o formattazione Markdown. "
+        "content": """You create short fantasy episodes for a mobile game.
 
-        "Informazioni sull'hotel: "
-        "L'indirizzo dell'hotel è Piazza San Lorenzo 1, Bologna. "
-        "Il check-in è disponibile dalle ore 15:00. "
-        "Il check-out deve essere effettuato entro le ore 11:00. "
-        "Gli animali domestici non sono ammessi. "
-        "Il numero di telefono dell'hotel è +39 051 555 0199. "
+Each episode must follow this structure:
 
-        "Usa queste informazioni solo quando sono pertinenti alla domanda dell'utente. "
-        "Per domande non relative all'hotel, rispondi normalmente usando le tue conoscenze generali. "
-        "Se l'utente chiede un'informazione specifica sull'hotel che non è presente qui, "
-        "rispondi chiaramente che non disponi di quell'informazione. "
-        "Non inventare informazioni sull'hotel."
-        )
+1. You — show the character in its normal state.
+2. Need — give the character a clear reason to want the new ability.
+3. Go — the character enters an unfamiliar situation.
+4. Search — the character tries to gain or use the ability.
+5. Find — the character discovers how the ability works.
+6. Take — gaining the ability has a cost, risk, or difficulty.
+7. Return — the character returns to safety or resolves the situation.
+8. Change — the character clearly uses the new ability.
 
+Rules:
+
+* Use the character description provided by the user.
+* write in a discorsive way"""
+    }
+]
+
+
+messages = [
+    {
+        "role": "system",
+        "content": """You create a space of abilities that a fantasy chracter could unlock in order to achieve a goal. The ability are dependent with each other. Some cannot be unlocked before others.
+
+Rules:
+
+* Use the character description provided by the user."""
+    }
+]
+
+messages = [
+    {
+        "role": "system",
+        "content": """You create a list specific goals for a fantasy chracter. The goal has to be specific and detailed for the character. Each goal is aimed at self-actualization and individuation.
+
+Rules:
+
+* Use the character description provided by the user."""
     }
 ]
 
@@ -47,7 +68,7 @@ while True:
     stream = client.chat.completions.create(
         model="local",
         messages=messages,
-        temperature=0.7,
+        temperature=1,
         max_tokens=500,
         stream=True,
     )
