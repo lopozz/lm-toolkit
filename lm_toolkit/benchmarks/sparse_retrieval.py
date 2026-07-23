@@ -126,9 +126,17 @@ def load_task_texts(task: RetrievalTask) -> tuple[dict[str, str], dict[str, str]
     lang_prefix = "ita" if task.task_name == "WebFAQRetrieval" else task.language
     # WikipediaRetrievalMultilingual keys rows by "_id" instead of "id".
     id_column = "_id" if task.task_name == "WikipediaRetrievalMultilingual" else "id"
-    params = {"path": f"mteb/{task.task_name}", "split": task.split}
-    corpus_ds = load_dataset(name=f"{lang_prefix}-corpus", **params)
-    queries_ds = load_dataset(name=f"{lang_prefix}-queries", **params)
+
+    if task.task_name == "CulturaViva-Retrieval":
+        # Hosted directly (not under the mteb/ org), with unprefixed config names.
+        params = {"path": "lopozz/CulturaViva-Retrieval", "split": task.split}
+        corpus_ds = load_dataset(name="corpus", **params)
+        queries_ds = load_dataset(name="queries", **params)
+    else:
+        params = {"path": f"mteb/{task.task_name}", "split": task.split}
+        corpus_ds = load_dataset(name=f"{lang_prefix}-corpus", **params)
+        queries_ds = load_dataset(name=f"{lang_prefix}-queries", **params)
+
     corpus = {str(row[id_column]): str(row["text"]) for row in corpus_ds}
     queries = {str(row[id_column]): str(row["text"]) for row in queries_ds}
     return corpus, queries

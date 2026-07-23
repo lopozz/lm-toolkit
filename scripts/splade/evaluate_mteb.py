@@ -82,6 +82,8 @@ import argparse
 from pathlib import Path
 from datasets import load_dataset
 from mteb.models import ModelMeta
+from mteb.abstasks.retrieval import AbsTaskRetrieval
+from mteb.abstasks.task_metadata import TaskMetadata
 from sentence_transformers import SparseEncoder
 from mteb.models.model_meta import ScoringFunction
 from importlib.metadata import PackageNotFoundError, version
@@ -90,6 +92,27 @@ from sentence_transformers.sparse_encoder.modules import SparseStaticEmbedding, 
 from sentence_transformers.sparse_encoder.evaluation import SparseInformationRetrievalEvaluator
 
 from lm_toolkit.cache import ResultCache as SparseResultCache
+
+
+class CulturaVivaRetrieval(AbsTaskRetrieval):
+    """Custom task: not registered in MTEB, hosted outside the mteb/ org."""
+
+    metadata = TaskMetadata(
+        name="CulturaViva-Retrieval",
+        description="Italian retrieval dataset covering culturally-grounded, "
+        "long-form generated content.",
+        reference="https://huggingface.co/datasets/lopozz/CulturaViva-Retrieval",
+        dataset={
+            "path": "lopozz/CulturaViva-Retrieval",
+            "revision": "2347b286719a879cc5129cea5c4c5d3fa813dd1b",
+        },
+        type="Retrieval",
+        category="t2t",
+        modalities=["text"],
+        eval_splits=["test"],
+        eval_langs=["ita-Latn"],
+        main_score="ndcg_at_10",
+    )
 
 
 SPARSE_MODELS = {
@@ -209,6 +232,13 @@ def save_run_settings(
     with run_settings_path.open("w") as settings_file:
         for setting in [*existing_settings, run_settings]:
             settings_file.write(json.dumps(setting) + "\n")
+
+
+def task_languages(task, hf_subset: str) -> list[str]:
+    """eval_langs is a dict keyed by hf_subset for multilingual tasks, but a
+    plain list for monolingual ones (e.g. our custom CulturaViva-Retrieval)."""
+    eval_langs = task.metadata.eval_langs
+    return eval_langs[hf_subset] if isinstance(eval_langs, dict) else eval_langs
 
 
 def is_sparse_model(model_name: str) -> bool:
@@ -343,6 +373,8 @@ def main():
     )
 
     tasks = [t for t in tasks if t.metadata.name not in excluded]
+    # Not registered in MTEB's task registry, so mteb.get_tasks() never returns it.
+    tasks.append(CulturaVivaRetrieval())
 
     if not is_sparse_model(model_name):
         model = mteb.get_model(model_name)
@@ -376,7 +408,7 @@ def main():
                 language
                 for task in tasks
                 for hf_subset in task.hf_subsets
-                for language in task.metadata.eval_langs[hf_subset]
+                for language in task_languages(task, hf_subset)
             }
         )
         save_sparse_model_metadata(
@@ -393,6 +425,7 @@ def main():
                 "MuPLeR-retrieval",
                 "WebFAQRetrieval",
                 "WikipediaRetrievalMultilingual",
+                "CulturaViva-Retrieval",
             ]:
                 raise ValueError(
                     f"No sparse dataset mapping defined for task: {task_name}. "
@@ -411,13 +444,22 @@ def main():
 
             # Dataset mapping
             # Add more tasks here as needed.
-            dataset_path = f"mteb/{task_name}"
-            lang_prefix = "ita" if task_name == "WebFAQRetrieval" else "it"
-            hf_subset = lang_prefix
-            corpus_name = f"{lang_prefix}-corpus"
-            queries_name = f"{lang_prefix}-queries"
-            qrels_name = f"{lang_prefix}-qrels"
-            id_column = "_id" if task_name == "WikipediaRetrievalMultilingual" else "id"
+            if task_name == "CulturaViva-Retrieval":
+                # Hosted directly (not under the mteb/ org), unprefixed config names.
+                dataset_path = "lopozz/CulturaViva-Retrieval"
+                hf_subset = "default"
+                corpus_name = "corpus"
+                queries_name = "queries"
+                qrels_name = "qrels"
+                id_column = "id"
+            else:
+                dataset_path = f"mteb/{task_name}"
+                lang_prefix = "ita" if task_name == "WebFAQRetrieval" else "it"
+                hf_subset = lang_prefix
+                corpus_name = f"{lang_prefix}-corpus"
+                queries_name = f"{lang_prefix}-queries"
+                qrels_name = f"{lang_prefix}-qrels"
+                id_column = "_id" if task_name == "WikipediaRetrievalMultilingual" else "id"
 
             corpus_ds = load_dataset(
                 path=dataset_path,
@@ -501,7 +543,7 @@ def main():
                 "mrr_at_10": sparse_scores.get("dot_mrr@10"),
                 "main_score": sparse_scores.get("dot_ndcg@10"),
                 "hf_subset": hf_subset,
-                "languages": task.metadata.eval_langs[hf_subset],
+                "languages": task_languages(task, hf_subset),
                 "mteb_version": mteb.__version__,
             }
 
