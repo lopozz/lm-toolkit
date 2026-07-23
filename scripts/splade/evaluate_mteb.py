@@ -81,16 +81,20 @@ import argparse
 from pathlib import Path
 from datasets import load_dataset
 from mteb.models import ModelMeta
+from sentence_transformers import SparseEncoder
 from mteb.models.model_meta import ScoringFunction
 from importlib.metadata import PackageNotFoundError, version
-from sentence_transformers import SparseEncoder
-from sentence_transformers.sparse_encoder.evaluation import (
-    SparseInformationRetrievalEvaluator,
-)
+from sentence_transformers.sentence_transformer.modules import Router, Transformer
+from sentence_transformers.sparse_encoder.modules import SparseStaticEmbedding, SpladePooling
+from sentence_transformers.sparse_encoder.evaluation import SparseInformationRetrievalEvaluator
+
+from lm_toolkit.cache import ResultCache as SparseResultCache
+
 
 SPARSE_MODELS = {
     "opensearch-project/opensearch-neural-sparse-encoding-multilingual-v1",
     "nickprock/splade-bert-base-italian-xxl-uncased-cv",
+    "models/splade-bert-base-italian-xxl-uncased-cv",
 }
 
 
@@ -255,6 +259,27 @@ def describe_sparse_query_expansion(model) -> str:
     return "Sparse query expansion by model configuration: unknown"
 
 
+def load_sparse_model(model_name: str, query_expansion: bool) -> SparseEncoder:
+    if query_expansion:
+        return SparseEncoder(model_name)
+
+    # Force the query side through a SparseStaticEmbedding (lexical reweighting
+    # of input tokens only, no MLM expansion), while documents keep the full
+    # Transformer + SpladePooling route.
+    mlm_transformer = Transformer(model_name, transformer_task="fill-mask")
+    splade_pooling = SpladePooling(
+        pooling_strategy="max",
+        embedding_dimension=mlm_transformer.get_embedding_dimension(),
+    )
+    router = Router.for_query_document(
+        query_modules=[
+            SparseStaticEmbedding(tokenizer=mlm_transformer.tokenizer, frozen=True)
+        ],
+        document_modules=[mlm_transformer, splade_pooling],
+    )
+    return SparseEncoder(modules=[router])
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate retrieval models with MTEB.")
     parser.add_argument(
@@ -271,6 +296,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--overwrite-strategy", default="always")
     parser.add_argument("--results-dir", type=Path, default=Path("./results"))
+    parser.add_argument(
+        "--no-query-expansion",
+        action="store_false",
+        dest="query_expansion",
+        help="Sparse models only: replace the query route with a "
+        "SparseStaticEmbedding (lexical reweighting only, no MLM expansion).",
+    )
     return parser.parse_args()
 
 
@@ -319,11 +351,12 @@ def main():
         print(results)
 
     else:
-        model = SparseEncoder(model_name)
+        model = load_sparse_model(model_name, args.query_expansion)
         print(describe_sparse_query_expansion(model))
         all_task_results = []
 
         model_revision = get_sparse_model_revision(model_name, model)
+        sparse_cache = SparseResultCache(root=args.results_dir)
         result_folder = args.results_dir / safe_model_name / model_revision
         result_folder.mkdir(parents=True, exist_ok=True)
         prediction_folder = args.results_dir / safe_model_name / "prediction_folder"
@@ -355,6 +388,12 @@ def main():
                     f"No sparse dataset mapping defined for task: {task_name}. "
                     "Add dataset_path, corpus_name, queries_name, qrels_name, and id_column."
                 )
+
+            if overwrite_strategy != "always" and sparse_cache.has_result(
+                model_name, task_name, model_revision
+            ):
+                print(f"Skipping {task_name}: cached result exists")
+                continue
 
             split = "test"
 
@@ -470,10 +509,9 @@ def main():
 
             all_task_results.append(task_result)
 
-            task_result_path = result_folder / f"{task_name}.json"
-
-            with open(task_result_path, "w") as f:
-                json.dump(task_result, f, indent=2)
+            task_result_path = sparse_cache.save_result(
+                task_result, model=model_name, task=task_name, revision=model_revision
+            )
 
             save_run_settings(
                 result_folder=result_folder,
