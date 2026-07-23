@@ -74,6 +74,7 @@ the standard MTEB workflow.
 
 import json
 import time
+import torch
 import yaml
 import mteb
 import argparse
@@ -271,9 +272,18 @@ def load_sparse_model(model_name: str, query_expansion: bool) -> SparseEncoder:
         pooling_strategy="max",
         embedding_dimension=mlm_transformer.get_embedding_dimension(),
     )
+    # The MLM head's real output width is config.vocab_size, which for some
+    # checkpoints (e.g. dbmdz/bert-base-italian-xxl-uncased) is larger than
+    # len(tokenizer.get_vocab()) -- size the static embedding to match it so
+    # query and document vectors share the same dimensionality.
+    vocab_size = mlm_transformer.model.config.vocab_size
     router = Router.for_query_document(
         query_modules=[
-            SparseStaticEmbedding(tokenizer=mlm_transformer.tokenizer, frozen=True)
+            SparseStaticEmbedding(
+                tokenizer=mlm_transformer.tokenizer,
+                weight=torch.ones(vocab_size),
+                frozen=True,
+            )
         ],
         document_modules=[mlm_transformer, splade_pooling],
     )
@@ -294,7 +304,7 @@ def parse_args() -> argparse.Namespace:
         help="Dataset task configuration YAML.",
     )
     parser.add_argument("--batch-size", type=int, default=16)
-    parser.add_argument("--overwrite-strategy", default="always")
+    parser.add_argument("--overwrite-strategy", default="only-missing")
     parser.add_argument("--results-dir", type=Path, default=Path("./results"))
     parser.add_argument(
         "--no-query-expansion",
@@ -332,7 +342,7 @@ def main():
         eval_splits=["test"],
     )
 
-    tasks = [t for t in tasks if t.metadata.name not in excluded][1:]
+    tasks = [t for t in tasks if t.metadata.name not in excluded]
 
     if not is_sparse_model(model_name):
         model = mteb.get_model(model_name)

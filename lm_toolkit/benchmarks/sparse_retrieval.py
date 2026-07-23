@@ -124,11 +124,13 @@ def load_task_texts(task: RetrievalTask) -> tuple[dict[str, str], dict[str, str]
     # WebFAQRetrieval uses ISO 639-3 subset names (e.g. "ita-corpus") while
     # other MTEB retrieval tasks used here use ISO 639-1 (e.g. "it-corpus").
     lang_prefix = "ita" if task.task_name == "WebFAQRetrieval" else task.language
+    # WikipediaRetrievalMultilingual keys rows by "_id" instead of "id".
+    id_column = "_id" if task.task_name == "WikipediaRetrievalMultilingual" else "id"
     params = {"path": f"mteb/{task.task_name}", "split": task.split}
     corpus_ds = load_dataset(name=f"{lang_prefix}-corpus", **params)
     queries_ds = load_dataset(name=f"{lang_prefix}-queries", **params)
-    corpus = {str(row["id"]): str(row["text"]) for row in corpus_ds}
-    queries = {str(row["id"]): str(row["text"]) for row in queries_ds}
+    corpus = {str(row[id_column]): str(row["text"]) for row in corpus_ds}
+    queries = {str(row[id_column]): str(row["text"]) for row in queries_ds}
     return corpus, queries
 
 

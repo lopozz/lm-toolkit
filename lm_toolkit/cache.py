@@ -3,8 +3,7 @@ Lightweight on-disk cache for benchmark results, keyed by model and task.
 
 Unlike `mteb.ResultCache`, this doesn't track dataset revisions or MTEB
 versions to decide what to rerun: a cached result is either present (skip) or
-absent (run). Adapted from a similar cache used for WER benchmarking in
-another project.
+absent (run).
 """
 
 from __future__ import annotations

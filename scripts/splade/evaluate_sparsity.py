@@ -24,6 +24,7 @@ Typical usage:
 
 import argparse
 import lm_toolkit
+import torch
 
 from sentence_transformers import SparseEncoder
 from sentence_transformers.sentence_transformer.modules import Router, Transformer
@@ -43,9 +44,18 @@ def load_backend(model_name: str, device: str, query_expansion: bool) -> SparseE
         pooling_strategy="max",
         embedding_dimension=mlm_transformer.get_embedding_dimension(),
     )
+    # The MLM head's real output width is config.vocab_size, which for some
+    # checkpoints (e.g. dbmdz/bert-base-italian-xxl-uncased) is larger than
+    # len(tokenizer.get_vocab()) -- size the static embedding to match it so
+    # query and document vectors share the same dimensionality.
+    vocab_size = mlm_transformer.model.config.vocab_size
     router = Router.for_query_document(
         query_modules=[
-            SparseStaticEmbedding(tokenizer=mlm_transformer.tokenizer, frozen=True)
+            SparseStaticEmbedding(
+                tokenizer=mlm_transformer.tokenizer,
+                weight=torch.ones(vocab_size),
+                frozen=True,
+            )
         ],
         document_modules=[mlm_transformer, splade_pooling],
     )
