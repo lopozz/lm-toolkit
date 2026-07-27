@@ -27,3 +27,6 @@ audio = [
     "pyaudio>=0.2.14",
     "soundfile>=0.14.0",
 ]
+graphs = [
+    "matplotlib>=3.11.1",
+]

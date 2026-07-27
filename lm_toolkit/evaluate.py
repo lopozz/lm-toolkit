@@ -1,7 +1,8 @@
 from typing import Any
 
-from lm_toolkit.benchmarks.sparse_retrieval import evaluate_sparse_retrieval
+# from lm_toolkit.benchmarks.sparse_retrieval import evaluate_sparse_retrieval
 from lm_toolkit.benchmarks.tool_call import evaluate_tool_call
+from lm_toolkit.benchmarks.sparse_analysis import evaluate_sparse_retrieval
 
 
 def evaluate(
