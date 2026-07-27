@@ -555,10 +555,12 @@ def retrieval_by_length_bucket(
     k: int = 10,
 ) -> pd.DataFrame:
     """
-    Maps every query to the fixed-length bucket of its shortest gold document
-    (the one most likely to suffer truncation effects first), computes
-    per-query nDCG@k from saved evaluate_mteb.py predictions, and aggregates
-    nDCG by bucket for this single task.
+    Maps every query to the bucket of its shortest gold document (the one
+    most likely to suffer truncation effects first), reusing document_frame's
+    own "bucket" assignment -- so this always matches whichever scheme
+    (quantile or fixed) was used for the rest of the run, instead of
+    recomputing bucket edges independently. Computes per-query nDCG@k from
+    saved evaluate_mteb.py predictions, and aggregates nDCG by bucket.
 
     Returns an empty DataFrame (caller should skip saving/printing) if no
     predictions file is found for this model/task -- this requires having
@@ -567,26 +569,21 @@ def retrieval_by_length_bucket(
     predictions = load_predictions(task, results_path)
 
     relevant_docs = load_qrels(task)
-    effective_length_by_doc = document_frame.set_index("document_id")["effective_token_length"].to_dict()
+    bucket_by_doc = document_frame.set_index("document_id")["bucket"]
 
     records: list[dict[str, Any]] = []
     for query_id, gold_ids in relevant_docs.items():
-        gold_lengths = [
-            effective_length_by_doc[doc_id]
-            for doc_id in gold_ids
-            if doc_id in effective_length_by_doc
-        ]
-        if not gold_lengths:
+        present_ids = [doc_id for doc_id in gold_ids if doc_id in bucket_by_doc.index]
+        if not present_ids:
             continue
 
-        bucket = assign_fixed_length_bucket(min(gold_lengths))
+        bucket = bucket_by_doc.loc[present_ids].min()  # respects the ordered Categorical
         score = ndcg_at_k(predictions.get(query_id, {}), gold_ids, k)
 
         records.append(
             {
                 "query_id": query_id,
-                "fixed_length_bucket": bucket,
-                "gold_doc_min_effective_length": min(gold_lengths),
+                "bucket": bucket,
                 "num_gold_docs": len(gold_ids),
                 f"ndcg_at_{k}": score,
             }
@@ -596,13 +593,12 @@ def retrieval_by_length_bucket(
         return pd.DataFrame()
 
     per_query = pd.DataFrame(records)
-    bucket_order = [label for label, _, _ in FIXED_LENGTH_BUCKETS]
-    per_query["fixed_length_bucket"] = pd.Categorical(
-        per_query["fixed_length_bucket"], categories=bucket_order, ordered=True
+    per_query["bucket"] = pd.Categorical(
+        per_query["bucket"], categories=bucket_by_doc.cat.categories, ordered=True
     )
 
     return (
-        per_query.groupby("fixed_length_bucket", observed=True)
+        per_query.groupby("bucket", observed=True)
         .agg(
             queries=("query_id", "count"),
             **{
@@ -611,7 +607,7 @@ def retrieval_by_length_bucket(
             },
         )
         .reset_index()
-        .sort_values("fixed_length_bucket")
+        .sort_values("bucket")
         .reset_index(drop=True)
     )
 
