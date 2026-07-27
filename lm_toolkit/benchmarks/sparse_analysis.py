@@ -37,6 +37,13 @@ FIXED_LENGTH_BUCKETS: tuple[tuple[str, int, int | None], ...] = (
     (">150", 151, None),
 )
 
+DEFAULT_TASK_NAMES = (
+    "CulturaViva-Retrieval",
+    "MuPLeR-retrieval",
+    "WikipediaRetrievalMultilingual",
+    "WebFAQRetrieval",
+)
+
 Expansion = list[dict[int, Any]]
 
 @dataclass(frozen=True)
@@ -614,6 +621,13 @@ def evaluate_sparse_retrieval(
     backend: SparseEncoder,
     batch_size: int = 16,
 ) -> list[dict[str, Any]]:
+    for task_config in tasks:
+        if task_config["task_name"] not in DEFAULT_TASK_NAMES:
+            raise ValueError(
+                f"Unsupported task: {task_config['task_name']!r}. "
+                f"Must be one of: {sorted(DEFAULT_TASK_NAMES)}"
+            )
+
     backend.eval()
 
     num_buckets = 5
