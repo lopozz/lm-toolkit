@@ -18,6 +18,7 @@ from sentence_transformers import SparseEncoder
 
 DOCUMENT_METRICS = (
     "active_dims",
+    "doc_vocab_size",
     "sparsity_ratio",
     "expansion_ratio",
     "expansion_weight_ratio",
@@ -186,6 +187,7 @@ def document_metrics(
     return {
         "raw_token_length": raw_length,                                                 # the document's true length
         "effective_token_length": len(effective_ids),                                   # token after truncation (minus special tokens).
+        "doc_vocab_size": len(terms),                                                   # distinct token types in the effective input (length counts repeats, this doesn't)
         "was_truncated": was_truncated,                                                 # if raw_token_length exceeded the encoder's capacity
         "active_dims": float(active_dims),                                              # number of non-zero dimensions in the sparse vector
         "sparsity_ratio": float(sparsity_ratio),                                        # fraction of the vocabulary that stayed at zero (1 - density).
@@ -310,6 +312,9 @@ def summarize_buckets(frame: pd.DataFrame) -> pd.DataFrame:
             min_raw_length=("raw_token_length", "min"),
             median_raw_length=("raw_token_length", "median"),
             max_raw_length=("raw_token_length", "max"),
+            min_doc_vocab_size=("doc_vocab_size", "min"),
+            median_doc_vocab_size=("doc_vocab_size", "median"),
+            max_doc_vocab_size=("doc_vocab_size", "max"),
             truncation_rate=("was_truncated", "mean"),
             active_dims_mean=("active_dims", "mean"),
             active_dims_median=("active_dims", "median"),
@@ -317,6 +322,9 @@ def summarize_buckets(frame: pd.DataFrame) -> pd.DataFrame:
             expansion_mean=("expansion", "mean"),
             expansion_median=("expansion", "median"),
             expansion_p90=("expansion", p90),
+            retention_mean=("retention", "mean"),
+            retention_median=("retention", "median"),
+            retention_p90=("retention", p90),
             sparsity_mean=("sparsity_ratio", "mean"),
             expansion_ratio_mean=("expansion_ratio", "mean"),
             expansion_weight_ratio_mean=("expansion_weight_ratio", "mean"),
@@ -331,6 +339,8 @@ def summarize_buckets(frame: pd.DataFrame) -> pd.DataFrame:
         "max_effective_length",
         "min_raw_length",
         "max_raw_length",
+        "min_doc_vocab_size",
+        "max_doc_vocab_size",
     ]
     summary[int_columns] = summary[int_columns].astype(int)
 
