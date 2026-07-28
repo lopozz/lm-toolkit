@@ -376,38 +376,6 @@ def summarize_overall(frame: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(records)
 
 
-def calculate_correlations(frame: pd.DataFrame) -> pd.DataFrame:
-    records: list[dict[str, Any]] = []
-
-    length_columns = (
-        "raw_token_length",
-        "effective_token_length",
-    )
-
-    for length_column in length_columns:
-        for metric in DOCUMENT_METRICS:
-            valid = frame[[length_column, metric]].dropna()
-
-            if len(valid) < 3:
-                rho = math.nan
-                p_value = math.nan
-            else:
-                result = spearmanr(valid[length_column], valid[metric])
-                rho = float(result.statistic)
-                p_value = float(result.pvalue)
-
-            records.append(
-                {
-                    "length_variable": length_column,
-                    "metric": metric,
-                    "documents": len(valid),
-                    "spearman_rho": rho,
-                    "p_value": p_value,
-                }
-            )
-
-    return pd.DataFrame(records)
-
 def assign_fixed_length_bucket(
     effective_length: int,
     buckets: tuple[tuple[str, int, int | None], ...] = FIXED_LENGTH_BUCKETS,
@@ -480,7 +448,6 @@ def print_key_results(
     overall_summary: pd.DataFrame,
     retrieval_summary: pd.DataFrame,
     bucket_summary: pd.DataFrame,
-    correlations: pd.DataFrame,
 ) -> None:
     print("\nOverall summary")
     print(overall_summary.round(3).to_string(index=False))
@@ -494,22 +461,6 @@ def print_key_results(
     print("\nBucket summary")
     print(bucket_summary.round(3).set_index("bucket").T.to_string())
 
-    key_correlations = correlations[
-        (correlations["length_variable"] == "effective_token_length")
-        & (
-            correlations["metric"].isin(
-                [
-                    "active_dims",
-                    "sparsity_ratio",
-                    "expansion_ratio",
-                    "expansion_weight_ratio",
-                ]
-            )
-        )
-    ]
-
-    print("\nKey Spearman correlations")
-    print(key_correlations.to_string(index=False))
 
 def task_hf_subset(task: RetrievalTask) -> str:
     if task.task_name == "CulturaViva-Retrieval":
@@ -959,7 +910,6 @@ def evaluate_sparse_retrieval(
         )
         overall_summary = summarize_overall(document_frame)
         bucket_summary = summarize_buckets(document_frame)
-        correlations = calculate_correlations(document_frame)
 
         # Per-document rows (active_dims, effective_token_length, bucket, ...),
         # so downstream analyses (e.g. a per-query error audit) can look up
@@ -974,10 +924,6 @@ def evaluate_sparse_retrieval(
         )
         bucket_summary.to_csv(
             output_dir / "bucket_summary.csv",
-            index=False,
-        )
-        correlations.to_csv(
-            output_dir / "spearman_correlations.csv",
             index=False,
         )
 
@@ -1002,7 +948,6 @@ def evaluate_sparse_retrieval(
             predictions = load_predictions(task, results_path)
             relevant_docs = load_qrels(task)
             fp_audit_results = run_fp_audit(document_frame, relevant_docs, predictions, k=10)
-            print_fp_audit_results(fp_audit_results)
         else:
             retrieval_summary = None
             print(
@@ -1010,7 +955,10 @@ def evaluate_sparse_retrieval(
                 f"predictions found for {model} under {results_path}. "
                 "Run evaluate_mteb.py for this task/model first."
             )
-            
+
+        save_plots(document_frame, bucket_summary, output_dir)
+        print_key_results(overall_summary, retrieval_summary, bucket_summary)
+        if results_path.exists(): print_fp_audit_results(fp_audit_results)
 
         metadata = {
             "model": model,
@@ -1021,18 +969,6 @@ def evaluate_sparse_retrieval(
         (output_dir / "run_metadata.json").write_text(
             json.dumps(metadata, indent=2),
             encoding="utf-8",
-        )
-
-        save_plots(
-            document_frame,
-            bucket_summary,
-            output_dir,
-        )
-        print_key_results(
-            overall_summary,
-            retrieval_summary,
-            bucket_summary,
-            correlations,
         )
 
     return results
