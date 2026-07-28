@@ -4,6 +4,7 @@ import math
 import json
 import torch
 
+import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
@@ -18,7 +19,7 @@ from sentence_transformers import SparseEncoder
 
 DOCUMENT_METRICS = (
     "active_dims",
-    "doc_vocab_size",
+    "vocab_size",
     "sparsity_ratio",
     "expansion_ratio",
     "expansion_weight_ratio",
@@ -187,7 +188,7 @@ def document_metrics(
     return {
         "raw_token_length": raw_length,                                                 # the document's true length
         "effective_token_length": len(effective_ids),                                   # token after truncation (minus special tokens).
-        "doc_vocab_size": len(terms),                                                   # distinct token types in the effective input (length counts repeats, this doesn't)
+        "vocab_size": len(terms),                                                   # distinct token types in the effective input (length counts repeats, this doesn't)
         "was_truncated": was_truncated,                                                 # if raw_token_length exceeded the encoder's capacity
         "active_dims": float(active_dims),                                              # number of non-zero dimensions in the sparse vector
         "sparsity_ratio": float(sparsity_ratio),                                        # fraction of the vocabulary that stayed at zero (1 - density).
@@ -312,9 +313,9 @@ def summarize_buckets(frame: pd.DataFrame) -> pd.DataFrame:
             min_raw_length=("raw_token_length", "min"),
             median_raw_length=("raw_token_length", "median"),
             max_raw_length=("raw_token_length", "max"),
-            min_doc_vocab_size=("doc_vocab_size", "min"),
-            median_doc_vocab_size=("doc_vocab_size", "median"),
-            max_doc_vocab_size=("doc_vocab_size", "max"),
+            min_vocab_size=("vocab_size", "min"),
+            median_vocab_size=("vocab_size", "median"),
+            max_vocab_size=("vocab_size", "max"),
             truncation_rate=("was_truncated", "mean"),
             active_dims_mean=("active_dims", "mean"),
             active_dims_median=("active_dims", "median"),
@@ -339,8 +340,8 @@ def summarize_buckets(frame: pd.DataFrame) -> pd.DataFrame:
         "max_effective_length",
         "min_raw_length",
         "max_raw_length",
-        "min_doc_vocab_size",
-        "max_doc_vocab_size",
+        "min_vocab_size",
+        "max_vocab_size",
     ]
     summary[int_columns] = summary[int_columns].astype(int)
 
@@ -477,11 +478,16 @@ def save_plots(
 
 def print_key_results(
     overall_summary: pd.DataFrame,
+    retrieval_summary: pd.DataFrame,
     bucket_summary: pd.DataFrame,
     correlations: pd.DataFrame,
 ) -> None:
     print("\nOverall summary")
     print(overall_summary.round(3).to_string(index=False))
+
+    if retrieval_summary is not None:
+        print("\nnDCG@10 by bucket")
+        print(retrieval_summary.to_string(index=False))
 
     # Transposed: many metric columns but few buckets, so buckets-as-columns /
     # metrics-as-rows reads far better in a terminal than the wide CSV shape.
@@ -624,6 +630,290 @@ def retrieval_by_length_bucket(
         .reset_index(drop=True)
     )
 
+
+def build_fp_audit(
+    relevant_docs: dict[str, set[str]],
+    predictions: dict[str, dict[str, float]],
+    active_dims_by_doc: pd.Series,
+    length_by_doc: pd.Series,
+    bucket_by_doc: pd.Series,
+    k: int = 10,
+) -> pd.DataFrame:
+    """
+    For every query with NDCG@k < 1.0, finds the gold document the model
+    itself scored highest (its "best shot", for queries with more than one
+    gold doc) and the top-ranked false positive, then reports both documents'
+    score/active_dims/length/bucket plus the score_gap between them -- for
+    auditing whether retrieval failures come from the true doc scoring low,
+    the false positive scoring anomalously high, or both.
+    """
+    records: list[dict[str, Any]] = []
+
+    for query_id, gold_ids in relevant_docs.items():
+        results = predictions.get(query_id, {})
+        if not results:
+            continue
+
+        score = ndcg_at_k(results, gold_ids, k)
+        if score >= 1.0:
+            continue  # only auditing imperfect queries
+
+        ranked_ids = [
+            doc_id for doc_id, _ in sorted(results.items(), key=lambda item: item[1], reverse=True)
+        ]
+
+        gold_present = [doc_id for doc_id in gold_ids if doc_id in results]
+        if not gold_present:
+            continue
+
+        true_doc_id = max(gold_present, key=lambda doc_id: results[doc_id])
+        true_doc_score = results[true_doc_id]
+        true_doc_rank = ranked_ids.index(true_doc_id) + 1
+
+        top_fp_id = next(doc_id for doc_id in ranked_ids if doc_id not in gold_ids)
+        top_fp_score = results[top_fp_id]
+
+        records.append(
+            {
+                "query_id": query_id,
+                f"ndcg_at_{k}": score,
+                "true_doc_id": true_doc_id,
+                "true_doc_score": true_doc_score,
+                "true_doc_rank": true_doc_rank,
+                "true_doc_active_dims": active_dims_by_doc.get(true_doc_id),
+                "true_doc_length": length_by_doc.get(true_doc_id),
+                "true_doc_bucket": bucket_by_doc.get(true_doc_id),
+                "top_fp_id": top_fp_id,
+                "top_fp_score": top_fp_score,
+                "top_fp_active_dims": active_dims_by_doc.get(top_fp_id),
+                "top_fp_length": length_by_doc.get(top_fp_id),
+                "top_fp_bucket": bucket_by_doc.get(top_fp_id),
+                "score_gap": top_fp_score - true_doc_score,
+            }
+        )
+
+    return pd.DataFrame(records)
+
+
+def add_audit_flags(audit: pd.DataFrame) -> pd.DataFrame:
+    """
+    Adds H1 (short + dense false positives beat the true doc) comparison
+    columns to a build_fp_audit table: booleans for whether the false
+    positive actually outranks/outscores the true doc and whether it's
+    shorter/denser, plus the same two comparisons as continuous differences
+    and ratios instead of just yes/no.
+    """
+    audit = audit.copy()
+
+    audit["fp_outranks_true"] = audit["top_fp_score"] > audit["true_doc_score"]
+    audit["top_result_is_fp"] = audit["true_doc_rank"] > 1
+
+    audit["fp_shorter"] = audit["top_fp_length"] < audit["true_doc_length"]
+    audit["fp_more_active"] = audit["top_fp_active_dims"] > audit["true_doc_active_dims"]
+    audit["fp_shorter_and_more_active"] = audit["fp_shorter"] & audit["fp_more_active"]
+
+    audit["length_difference"] = audit["top_fp_length"] - audit["true_doc_length"]
+    audit["active_dims_difference"] = audit["top_fp_active_dims"] - audit["true_doc_active_dims"]
+
+    audit["active_dims_ratio"] = (
+        audit["top_fp_active_dims"] / audit["true_doc_active_dims"].replace(0, np.nan)
+    )
+    audit["length_ratio"] = audit["top_fp_length"] / audit["true_doc_length"].replace(0, np.nan)
+
+    return audit
+
+
+def summarize_displacement(audit: pd.DataFrame, displacement: pd.DataFrame) -> pd.Series:
+    """
+    displacement is the subset of an add_audit_flags-flagged audit table
+    where fp_outranks_true is True -- queries where a genuinely wrong
+    document outscored the true one. Summarizes H1 (short + dense false
+    positives beat the true doc) as a single set of headline numbers.
+    """
+    return pd.Series(
+        {
+            "audited_queries": len(audit),
+            "displacement_queries": len(displacement),
+            "median_true_length": displacement["true_doc_length"].median(),
+            "median_fp_length": displacement["top_fp_length"].median(),
+            "median_true_active_dims": displacement["true_doc_active_dims"].median(),
+            "median_fp_active_dims": displacement["top_fp_active_dims"].median(),
+            "share_fp_shorter": displacement["fp_shorter"].mean(),
+            "share_fp_more_active": displacement["fp_more_active"].mean(),
+            "share_fp_shorter_and_more_active": displacement["fp_shorter_and_more_active"].mean(),
+            "median_score_gap": displacement["score_gap"].median(),
+            "median_length_difference": displacement["length_difference"].median(),
+            "median_active_dims_difference": displacement["active_dims_difference"].median(),
+        }
+    )
+
+
+def summarize_displacement_by_bucket(displacement: pd.DataFrame, k: int = 10) -> pd.DataFrame:
+    """Same H1 breakdown as summarize_displacement, grouped by the true doc's
+    own length bucket -- so you can see whether displacement concentrates in
+    a specific length range rather than being spread evenly."""
+    return (
+        displacement.groupby("true_doc_bucket", observed=True)
+        .agg(
+            queries=("query_id", "size"),
+            ndcg_mean=(f"ndcg_at_{k}", "mean"),
+            true_rank_median=("true_doc_rank", "median"),
+            score_gap_mean=("score_gap", "mean"),
+            score_gap_median=("score_gap", "median"),
+            true_length_median=("true_doc_length", "median"),
+            fp_length_median=("top_fp_length", "median"),
+            true_active_dims_median=("true_doc_active_dims", "median"),
+            fp_active_dims_median=("top_fp_active_dims", "median"),
+            share_fp_shorter=("fp_shorter", "mean"),
+            share_fp_more_active=("fp_more_active", "mean"),
+            share_fp_shorter_and_more_active=("fp_shorter_and_more_active", "mean"),
+        )
+        .reset_index()
+    )
+
+
+def compute_bucket_enrichment(document_frame: pd.DataFrame, displacement: pd.DataFrame) -> pd.DataFrame:
+    """
+    Compares each length bucket's share of the whole corpus against its share
+    of top false positives. An enrichment_ratio above 1 means that bucket is
+    overrepresented among false positives relative to how common it actually
+    is in the corpus -- stronger evidence for H1 than a raw share_fp_shorter
+    number, since it controls for how common short documents are to begin with.
+    """
+    corpus_share = document_frame["bucket"].value_counts(normalize=True).sort_index()
+    fp_share = displacement["top_fp_bucket"].value_counts(normalize=True).sort_index()
+
+    enrichment = pd.concat(
+        [corpus_share.rename("corpus_share"), fp_share.rename("false_positive_share")],
+        axis=1,
+    )
+    enrichment["false_positive_share"] = enrichment["false_positive_share"].fillna(0.0)
+    enrichment["enrichment_ratio"] = (
+        enrichment["false_positive_share"] / enrichment["corpus_share"].replace(0, np.nan)
+    )
+    return enrichment.reset_index(names="bucket")
+
+
+def compute_fp_active_dims_baseline(document_frame: pd.DataFrame, displacement: pd.DataFrame) -> pd.DataFrame:
+    """
+    Adds fp_active_excess and fp_active_zscore to displacement: how far the
+    false positive's active_dims sits above its OWN bucket's median/mean --
+    i.e. is it anomalously dense even for documents of its own length, not
+    just denser than the (differently-bucketed) true doc.
+    """
+    bucket_active_baseline = (
+        document_frame.groupby("bucket", observed=True)["active_dims"]
+        .agg(["mean", "median", "std"])
+        .rename(
+            columns={
+                "mean": "bucket_active_mean",
+                "median": "bucket_active_median",
+                "std": "bucket_active_std",
+            }
+        )
+    )
+
+    displacement = displacement.join(bucket_active_baseline, on="top_fp_bucket")
+
+    displacement["fp_active_excess"] = (
+        displacement["top_fp_active_dims"] - displacement["bucket_active_median"]
+    )
+    displacement["fp_active_zscore"] = (
+        displacement["top_fp_active_dims"] - displacement["bucket_active_mean"]
+    ) / displacement["bucket_active_std"].replace(0, np.nan)
+
+    return displacement
+
+
+def run_fp_audit(
+    document_frame: pd.DataFrame,
+    relevant_docs: dict[str, set[str]],
+    predictions: dict[str, dict[str, float]],
+    k: int = 10,
+) -> dict[str, Any]:
+    """
+    Runs the full H1 (short + dense false positives beat the true doc) audit
+    in one call: builds the per-query audit, flags the H1 comparisons, and
+    computes all four summaries. Everything here is cheap pandas work over
+    already-loaded predictions/qrels/document_frame -- nothing gets
+    re-encoded, so this is safe to call repeatedly from a notebook.
+    """
+    active_dims_by_doc = document_frame.set_index("document_id")["active_dims"]
+    length_by_doc = document_frame.set_index("document_id")["effective_token_length"]
+    bucket_by_doc = document_frame.set_index("document_id")["bucket"]
+
+    audit = add_audit_flags(
+        build_fp_audit(relevant_docs, predictions, active_dims_by_doc, length_by_doc, bucket_by_doc, k=k)
+    )
+    displacement = audit[audit["fp_outranks_true"]].copy()
+
+    return {
+        "audit": audit,
+        "displacement": displacement,
+        "displacement_summary": summarize_displacement(audit, displacement),
+        "displacement_by_bucket": summarize_displacement_by_bucket(displacement, k=k),
+        "bucket_enrichment": compute_bucket_enrichment(document_frame, displacement),
+        "fp_active_baseline": compute_fp_active_dims_baseline(document_frame, displacement),
+    }
+
+
+def print_fp_audit_results(results: dict[str, Any]) -> None:
+    """
+    H1 audit: among queries the model got wrong, does the winning false
+    positive tend to be shorter and denser (more active dims) than the true
+    (gold) document? Each section below narrows the question:
+      1. does it happen, and how often, overall
+      2. where it concentrates (by the true doc's own length bucket)
+      3. whether short/dense documents are overrepresented among false
+         positives relative to their actual share of the corpus
+      4. whether the winning false positive is anomalously dense even
+         relative to other documents of its own length (not just denser
+         than the differently-sized true doc it beat)
+    """
+    print("\nDisplacement summary: does H1 happen, and how often, overall?")
+    print(results["displacement_summary"].round(3).to_string())
+
+    print(
+        "\nDisplacement by bucket: does it concentrate at a particular true-doc "
+        "length? (queries = number of displaced queries whose true doc falls in "
+        "that bucket; share_fp_* = fraction of those where the false positive "
+        "was shorter / denser / both)"
+    )
+    print(results["displacement_by_bucket"].round(3).to_string(index=False))
+
+    print(
+        "\nBucket enrichment: are short/dense buckets overrepresented among false "
+        "positives relative to how common they actually are in the corpus? "
+        "(enrichment_ratio > 1 = overrepresented, < 1 = underrepresented)"
+    )
+    print(results["bucket_enrichment"].round(3).to_string(index=False))
+
+    print(
+        "\nFP active-dims anomaly: is the winning false positive denser than even "
+        "other documents of its OWN length (not just denser than the true doc it "
+        "beat)? fp_active_excess = raw gap over its bucket's median active_dims; "
+        "fp_active_zscore = same gap in standard-deviation units."
+    )
+    baseline = results["fp_active_baseline"]
+    print(
+        baseline[["fp_active_excess", "fp_active_zscore"]]
+        .describe()
+        .round(3)
+        .to_string()
+    )
+    print()
+    print(
+        baseline.groupby("true_doc_bucket", observed=True)
+        .agg(
+            fp_active_excess_median=("fp_active_excess", "median"),
+            fp_active_zscore_mean=("fp_active_zscore", "mean"),
+            share_fp_above_bucket_median=("fp_active_excess", lambda values: (values > 0).mean()),
+        )
+        .round(3)
+        .to_string()
+    )
+
+
 def evaluate_sparse_retrieval(
     model: str,
     tasks: list[dict[str, Any]],
@@ -671,6 +961,13 @@ def evaluate_sparse_retrieval(
         bucket_summary = summarize_buckets(document_frame)
         correlations = calculate_correlations(document_frame)
 
+        # Per-document rows (active_dims, effective_token_length, bucket, ...),
+        # so downstream analyses (e.g. a per-query error audit) can look up
+        # document-level metrics without re-encoding the whole corpus.
+        document_frame.to_csv(
+            output_dir / "document_frame.csv",
+            index=False,
+        )
         overall_summary.to_csv(
             output_dir / "overall_summary.csv",
             index=False,
@@ -692,20 +989,28 @@ def evaluate_sparse_retrieval(
                 task=task,
                 results_path=results_path,
             )
-            if not retrieval_summary.empty:
-                retrieval_summary.to_csv(
-                    output_dir / "retrieval_by_length_bucket.csv",
-                    index=False,
-                )
-                print("\nRetrieval quality (nDCG@10) by gold-document length bucket")
-                print(retrieval_summary.to_string(index=False))
 
+            assert not retrieval_summary.empty, f"Expected non-empty retrieval summary for {task.task_name} at {results_path}"
+
+            retrieval_summary.to_csv(
+                output_dir / "retrieval_by_length_bucket.csv",
+                index=False,
+            )
+
+            # Reuses the same predictions/qrels already needed above -- cheap,
+            # since document_frame (the expensive part) is already in memory.
+            predictions = load_predictions(task, results_path)
+            relevant_docs = load_qrels(task)
+            fp_audit_results = run_fp_audit(document_frame, relevant_docs, predictions, k=10)
+            print_fp_audit_results(fp_audit_results)
         else:
+            retrieval_summary = None
             print(
                 f"Skipping retrieval-by-length for {task.task_name}: no saved "
                 f"predictions found for {model} under {results_path}. "
                 "Run evaluate_mteb.py for this task/model first."
             )
+            
 
         metadata = {
             "model": model,
@@ -725,6 +1030,7 @@ def evaluate_sparse_retrieval(
         )
         print_key_results(
             overall_summary,
+            retrieval_summary,
             bucket_summary,
             correlations,
         )

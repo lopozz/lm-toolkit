@@ -75,16 +75,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--language", default="it")
     parser.add_argument("--split", default="test")
     parser.add_argument("--batch-size", type=int, default=16)
-    parser.add_argument(
-        "--query-limit",
-        type=int,
-        help="Optional cap on number of queries encoded (default: all).",
-    )
-    parser.add_argument(
-        "--document-limit",
-        type=int,
-        help="Optional cap on number of documents encoded (default: all).",
-    )
     parser.add_argument("--device", default="cuda")
     parser.add_argument(
         "--no-query-expansion",
