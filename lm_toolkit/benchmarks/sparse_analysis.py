@@ -184,7 +184,6 @@ def document_metrics(
     active_dims = len(expansion)
 
     return {
-        
         "raw_token_length": raw_length,                                                 # the document's true length
         "effective_token_length": len(effective_ids),                                   # token after truncation (minus special tokens).
         "was_truncated": was_truncated,                                                 # if raw_token_length exceeded the encoder's capacity
@@ -315,6 +314,9 @@ def summarize_buckets(frame: pd.DataFrame) -> pd.DataFrame:
             active_dims_mean=("active_dims", "mean"),
             active_dims_median=("active_dims", "median"),
             active_dims_p90=("active_dims", p90),
+            expansion_mean=("expansion", "mean"),
+            expansion_median=("expansion", "median"),
+            expansion_p90=("expansion", p90),
             sparsity_mean=("sparsity_ratio", "mean"),
             expansion_ratio_mean=("expansion_ratio", "mean"),
             expansion_weight_ratio_mean=("expansion_weight_ratio", "mean"),
@@ -337,6 +339,7 @@ def summarize_buckets(frame: pd.DataFrame) -> pd.DataFrame:
 
 OVERALL_METRICS = (
     "active_dims",
+    "expansion",
     "sparsity_ratio",
     "expansion_ratio",
     "expansion_weight_ratio",
@@ -467,7 +470,7 @@ def print_key_results(
     bucket_summary: pd.DataFrame,
     correlations: pd.DataFrame,
 ) -> None:
-    print("\nOverall summary (whole dataset, not bucketed)")
+    print("\nOverall summary")
     print(overall_summary.round(3).to_string(index=False))
 
     # Transposed: many metric columns but few buckets, so buckets-as-columns /
