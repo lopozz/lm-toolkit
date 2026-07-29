@@ -83,6 +83,36 @@ def load_corpus(task: RetrievalTask) -> dict[str, str]:
         for row in corpus_ds
     }
 
+
+def load_queries(task: RetrievalTask) -> dict[str, str]:
+    lang_prefix = (
+        "ita" if task.task_name == "WebFAQRetrieval" else task.language
+    )
+    id_column = (
+        "_id"
+        if task.task_name == "WikipediaRetrievalMultilingual"
+        else "id"
+    )
+
+    if task.task_name == "CulturaViva-Retrieval":
+        queries_ds = load_dataset(
+            path="lopozz/CulturaViva-Retrieval",
+            name="queries",
+            split=task.split,
+        )
+    else:
+        queries_ds = load_dataset(
+            path=f"mteb/{task.task_name}",
+            name=f"{lang_prefix}-queries",
+            split=task.split,
+        )
+
+    return {
+        str(row[id_column]): str(row["text"])
+        for row in queries_ds
+    }
+
+
 def tensor_expansion(vector: Any) -> Expansion:
     if not torch.is_tensor(vector):
         vector = torch.as_tensor(vector)
@@ -298,6 +328,10 @@ def p90(series: pd.Series) -> float:
     return float(series.quantile(0.90))
 
 
+def p10(series: pd.Series) -> float:
+    return float(series.quantile(0.10))
+
+
 def summarize_buckets(frame: pd.DataFrame) -> pd.DataFrame:
     summary = (
         frame.groupby(
@@ -307,22 +341,19 @@ def summarize_buckets(frame: pd.DataFrame) -> pd.DataFrame:
         )
         .agg(
             documents=("document_id", "count"),
-            min_effective_length=("effective_token_length", "min"),
-            median_effective_length=("effective_token_length", "median"),
-            max_effective_length=("effective_token_length", "max"),
-            min_raw_length=("raw_token_length", "min"),
-            median_raw_length=("raw_token_length", "median"),
-            max_raw_length=("raw_token_length", "max"),
-            min_vocab_size=("vocab_size", "min"),
-            median_vocab_size=("vocab_size", "median"),
-            max_vocab_size=("vocab_size", "max"),
-            truncation_rate=("was_truncated", "mean"),
+            effective_length_p10=("effective_token_length", p10),
+            effective_length_mean=("effective_token_length", "mean"),
+            effective_length_median=("effective_token_length", "median"),
+            effective_length_p90=("effective_token_length", p90),
+            active_dims_p10=("active_dims", p10),
             active_dims_mean=("active_dims", "mean"),
             active_dims_median=("active_dims", "median"),
             active_dims_p90=("active_dims", p90),
+            expansion_p10=("expansion", p10),
             expansion_mean=("expansion", "mean"),
             expansion_median=("expansion", "median"),
             expansion_p90=("expansion", p90),
+            retention_p10=("retention", p10),
             retention_mean=("retention", "mean"),
             retention_median=("retention", "median"),
             retention_p90=("retention", p90),
@@ -334,16 +365,6 @@ def summarize_buckets(frame: pd.DataFrame) -> pd.DataFrame:
         )
         .reset_index()
     )
-
-    int_columns = [
-        "min_effective_length",
-        "max_effective_length",
-        "min_raw_length",
-        "max_raw_length",
-        "min_vocab_size",
-        "max_vocab_size",
-    ]
-    summary[int_columns] = summary[int_columns].astype(int)
 
     return summary.sort_values("bucket").reset_index(drop=True)
 
@@ -363,10 +384,17 @@ def summarize_overall(frame: pd.DataFrame) -> pd.DataFrame:
     """Whole-dataset aggregate (mean/median/p90), independent of length bucket --
     the same view lm_toolkit/benchmarks/sparse_retrieval.py reports. Not
     derivable from summarize_buckets: medians/p90 don't combine across
-    sub-groups the way means do."""
+    sub-groups the way means do.
+
+    Covers only stats that require encoding text through the sparse encoder
+    (active_dims, expansion, sparsity, ...). Token-length/vocab-size/
+    truncation-rate stats don't need encoding at all -- see
+    scripts/splade/analyze_dataset_stats.py for those, run independently as a
+    cheap first look at a dataset before any encoder-dependent analysis."""
     records = [
         {
             "metric": metric,
+            "p10": p10(frame[metric]),
             "mean": frame[metric].mean(),
             "median": frame[metric].median(),
             "p90": p90(frame[metric]),
@@ -386,62 +414,36 @@ def assign_fixed_length_bucket(
     raise ValueError(f"No fixed-length bucket matched length: {effective_length}")
 
 
-def save_plots(
-    frame: pd.DataFrame,
-    bucket_summary: pd.DataFrame,
-    output_dir: Path,
-) -> None:
-    dataset = frame["dataset"].iloc[0]
-    safe_name = dataset.lower().replace("/", "_").replace(" ", "_")
+_STAT_SUFFIXES = ("p10", "mean", "median", "p90")
 
-    # Hexbin avoids unreadable overplotting for thousands of documents.
-    fig, ax = plt.subplots(figsize=(8, 6))
-    image = ax.hexbin(
-        frame["effective_token_length"],
-        frame["active_dims"],
-        gridsize=45,
-        mincnt=1,
-    )
-    ax.set_title(f"{dataset}: length vs active dimensions")
-    ax.set_xlabel("Effective token length")
-    ax.set_ylabel("Active dimensions")
-    fig.colorbar(image, ax=ax, label="Documents per hexagon")
-    fig.tight_layout()
-    fig.savefig(
-        output_dir / f"{safe_name}_length_vs_active_dims.png",
-        dpi=180,
-    )
-    plt.close(fig)
 
-    fig, ax = plt.subplots(figsize=(8, 6))
-    ax.plot(
-        bucket_summary["bucket"],
-        bucket_summary["active_dims_mean"],
-        marker="o",
-        label="Mean",
-    )
-    ax.plot(
-        bucket_summary["bucket"],
-        bucket_summary["active_dims_median"],
-        marker="o",
-        label="Median",
-    )
-    ax.plot(
-        bucket_summary["bucket"],
-        bucket_summary["active_dims_p90"],
-        marker="o",
-        label="P90",
-    )
-    ax.set_title(f"{dataset}: active dimensions by length bucket")
-    ax.set_xlabel("Length quantile")
-    ax.set_ylabel("Active dimensions")
-    ax.legend()
-    fig.tight_layout()
-    fig.savefig(
-        output_dir / f"{safe_name}_bucket_active_dims.png",
-        dpi=180,
-    )
-    plt.close(fig)
+def split_metric_stat(name: str) -> tuple[str, str]:
+    """Splits a bucket-summary column name like "active_dims_p90" into
+    ("active_dims", "p90"), so the printed table can carry metric and stat
+    as separate columns instead of one long joined name."""
+    if name in ("documents", "queries"):
+        return name, "count"
+
+    metric, _, stat = name.rpartition("_")
+    if metric and stat in _STAT_SUFFIXES:
+        return metric, stat
+    return name, ""
+
+
+def transpose_by_stat(frame: pd.DataFrame, index_column: str) -> pd.DataFrame:
+    """Transposes a bucket-summary-shaped frame (one row per bucket, one
+    column per metric_stat) into metric/stat.-labeled rows with one column
+    per bucket, blanking repeated metric names so each prints once above its
+    stat rows."""
+    transposed = frame.round(3).set_index(index_column).T
+    metric_names, stat_names = zip(*(split_metric_stat(name) for name in transposed.index))
+    deduped_metric_names = [
+        name if index == 0 or name != metric_names[index - 1] else ""
+        for index, name in enumerate(metric_names)
+    ]
+    transposed.insert(0, "stat.", stat_names)
+    transposed.insert(0, "metric", deduped_metric_names)
+    return transposed
 
 
 def print_key_results(
@@ -452,14 +454,14 @@ def print_key_results(
     print("\nOverall summary")
     print(overall_summary.round(3).to_string(index=False))
 
-    if retrieval_summary is not None:
-        print("\nnDCG@10 by bucket")
-        print(retrieval_summary.to_string(index=False))
-
     # Transposed: many metric columns but few buckets, so buckets-as-columns /
     # metrics-as-rows reads far better in a terminal than the wide CSV shape.
+    if retrieval_summary is not None:
+        print("\nnDCG@10 by bucket")
+        print(transpose_by_stat(retrieval_summary, "bucket").to_string(index=False))
+
     print("\nBucket summary")
-    print(bucket_summary.round(3).set_index("bucket").T.to_string())
+    print(transpose_by_stat(bucket_summary, "bucket").to_string(index=False))
 
 
 def task_hf_subset(task: RetrievalTask) -> str:
@@ -822,7 +824,7 @@ def print_fp_audit_results(results: dict[str, Any]) -> None:
          than the differently-sized true doc it beat)
     """
     print("\nDisplacement summary: does H1 happen, and how often, overall?")
-    print(results["displacement_summary"].round(3).to_string())
+    print(results["displacement_summary"].round(2).to_string())
 
     print(
         "\nDisplacement by bucket: does it concentrate at a particular true-doc "
@@ -830,14 +832,14 @@ def print_fp_audit_results(results: dict[str, Any]) -> None:
         "that bucket; share_fp_* = fraction of those where the false positive "
         "was shorter / denser / both)"
     )
-    print(results["displacement_by_bucket"].round(3).to_string(index=False))
+    print(results["displacement_by_bucket"].round(2).set_index("true_doc_bucket").T.to_string())
 
     print(
         "\nBucket enrichment: are short/dense buckets overrepresented among false "
         "positives relative to how common they actually are in the corpus? "
         "(enrichment_ratio > 1 = overrepresented, < 1 = underrepresented)"
     )
-    print(results["bucket_enrichment"].round(3).to_string(index=False))
+    print(results["bucket_enrichment"].round(2).to_string(index=False))
 
     print(
         "\nFP active-dims anomaly: is the winning false positive denser than even "
@@ -849,7 +851,7 @@ def print_fp_audit_results(results: dict[str, Any]) -> None:
     print(
         baseline[["fp_active_excess", "fp_active_zscore"]]
         .describe()
-        .round(3)
+        .round(2)
         .to_string()
     )
     print()
@@ -860,7 +862,7 @@ def print_fp_audit_results(results: dict[str, Any]) -> None:
             fp_active_zscore_mean=("fp_active_zscore", "mean"),
             share_fp_above_bucket_median=("fp_active_excess", lambda values: (values > 0).mean()),
         )
-        .round(3)
+        .round(2)
         .to_string()
     )
 
@@ -956,7 +958,6 @@ def evaluate_sparse_retrieval(
                 "Run evaluate_mteb.py for this task/model first."
             )
 
-        save_plots(document_frame, bucket_summary, output_dir)
         print_key_results(overall_summary, retrieval_summary, bucket_summary)
         if results_path.exists(): print_fp_audit_results(fp_audit_results)
 

@@ -22,7 +22,9 @@ from lm_toolkit.benchmarks.sparse_analysis import (
     add_dataset_quantile_buckets,
     load_corpus,
     load_queries,
+    p10,
     p90,
+    transpose_by_stat,
 )
 
 _SENTINEL_MAX_LENGTH = 100_000  # unset tokenizers report an unusably large sentinel
@@ -64,10 +66,19 @@ def summarize_overall_lengths(frame: pd.DataFrame) -> pd.DataFrame:
         ("vocab_size", "vocab_size"),
         ("was_truncated", "truncation_rate"),
     )
-    records = [{"metric": "documents", "mean": len(frame), "median": float("nan"), "p90": float("nan")}]
+    records = [
+        {
+            "metric": "documents",
+            "p10": float("nan"),
+            "mean": len(frame),
+            "median": float("nan"),
+            "p90": float("nan"),
+        }
+    ]
     records.extend(
         {
             "metric": label,
+            "p10": p10(frame[column]),
             "mean": frame[column].mean(),
             "median": frame[column].median(),
             "p90": p90(frame[column]),
@@ -82,29 +93,23 @@ def summarize_bucket_lengths(frame: pd.DataFrame) -> pd.DataFrame:
         frame.groupby("bucket", observed=True, sort=True)
         .agg(
             documents=("text_id", "count"),
-            min_effective_length=("effective_token_length", "min"),
-            median_effective_length=("effective_token_length", "median"),
-            max_effective_length=("effective_token_length", "max"),
-            min_raw_length=("raw_token_length", "min"),
-            median_raw_length=("raw_token_length", "median"),
-            max_raw_length=("raw_token_length", "max"),
-            min_vocab_size=("vocab_size", "min"),
-            median_vocab_size=("vocab_size", "median"),
-            max_vocab_size=("vocab_size", "max"),
+            effective_length_p10=("effective_token_length", p10),
+            effective_length_mean=("effective_token_length", "mean"),
+            effective_length_median=("effective_token_length", "median"),
+            effective_length_p90=("effective_token_length", p90),
+            raw_length_p10=("raw_token_length", p10),
+            raw_length_mean=("raw_token_length", "mean"),
+            raw_length_median=("raw_token_length", "median"),
+            raw_length_p90=("raw_token_length", p90),
+            vocab_size_p10=("vocab_size", p10),
+            vocab_size_mean=("vocab_size", "mean"),
+            vocab_size_median=("vocab_size", "median"),
+            vocab_size_p90=("vocab_size", p90),
             truncation_rate=("was_truncated", "mean"),
         )
         .reset_index()
     )
 
-    int_columns = [
-        "min_effective_length",
-        "max_effective_length",
-        "min_raw_length",
-        "max_raw_length",
-        "min_vocab_size",
-        "max_vocab_size",
-    ]
-    summary[int_columns] = summary[int_columns].astype(int)
     return summary
 
 
@@ -141,7 +146,7 @@ def main() -> None:
         print(summarize_overall_lengths(frame).round(3).to_string(index=False))
 
         print(f"\n{task.task_name} -- {label} bucketed summary")
-        print(summarize_bucket_lengths(frame).round(3).set_index("bucket").T.to_string())
+        print(transpose_by_stat(summarize_bucket_lengths(frame), "bucket").to_string(index=False))
 
 
 if __name__ == "__main__":
