@@ -1,5 +1,6 @@
 .codex
 results/
+outputs/
 .venv
 Untitled-1.ipynb
 models/
