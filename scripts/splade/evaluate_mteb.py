@@ -82,10 +82,10 @@ import argparse
 from pathlib import Path
 from datasets import load_dataset
 from mteb.models import ModelMeta
-from mteb.abstasks.retrieval import AbsTaskRetrieval
-from mteb.abstasks.task_metadata import TaskMetadata
 from sentence_transformers import SparseEncoder
 from mteb.models.model_meta import ScoringFunction
+from mteb.abstasks.retrieval import AbsTaskRetrieval
+from mteb.abstasks.task_metadata import TaskMetadata
 from importlib.metadata import PackageNotFoundError, version
 from sentence_transformers.sentence_transformer.modules import Router, Transformer
 from sentence_transformers.sparse_encoder.modules import SparseStaticEmbedding, SpladePooling
@@ -343,6 +343,14 @@ def parse_args() -> argparse.Namespace:
         help="Sparse models only: replace the query route with a "
         "SparseStaticEmbedding (lexical reweighting only, no MLM expansion).",
     )
+    parser.add_argument(
+        "--max-active-dims",
+        type=int,
+        default=None,
+        help="Sparse models only: post-hoc top-k pruning of document/query "
+        "activations before scoring (keeps only the k highest-weighted "
+        "dimensions, zeroes the rest). Default: unpruned.",
+    )
     return parser.parse_args()
 
 
@@ -351,6 +359,7 @@ def main():
     if args.batch_size < 1:
         raise ValueError("--batch-size must be a positive integer.")
 
+    split = "test"
     model_name = args.model_name
     batch_size = args.batch_size
     overwrite_strategy = args.overwrite_strategy
@@ -438,7 +447,6 @@ def main():
                 print(f"Skipping {task_name}: cached result exists")
                 continue
 
-            split = "test"
 
             print(f"Evaluating sparse model on task: {task_name}")
 
@@ -478,9 +486,7 @@ def main():
             )
 
             queries = {str(row[id_column]): row["text"] for row in queries_ds}
-
             corpus = {str(row[id_column]): row["text"] for row in corpus_ds}
-
             relevant_docs = {}
 
             for row in qrels_ds:
@@ -504,6 +510,7 @@ def main():
                 map_at_k=[100],
                 write_csv=False,
                 write_predictions=True,
+                max_active_dims=args.max_active_dims,
             )
 
             evaluation_start = time.perf_counter()
