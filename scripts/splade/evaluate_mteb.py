@@ -515,10 +515,6 @@ def main():
                     f"No sparse dataset mapping defined for task: {task_name}. "
                     "Add dataset_path, corpus_name, queries_name, qrels_name, and id_column."
                 )
-            if task_name not in [
-                "MMarco-IT-Retrieval"
-            ]: 
-                continue
 
             if overwrite_strategy != "always" and sparse_cache.has_result(
                 model_name, task_name, model_revision
