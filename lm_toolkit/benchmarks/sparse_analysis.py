@@ -6,12 +6,10 @@ import torch
 
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 
 from typing import Any
 from pathlib import Path
 from rich.progress import track
-from scipy.stats import spearmanr
 from datasets import load_dataset
 from dataclasses import dataclass
 from collections import defaultdict
@@ -53,64 +51,6 @@ class RetrievalTask:
     task_name: str
     language: str = "it"
     split: str = "test"
-
-
-def load_corpus(task: RetrievalTask) -> dict[str, str]:
-    lang_prefix = (
-        "ita" if task.task_name == "WebFAQRetrieval" else task.language
-    )
-    id_column = (
-        "_id"
-        if task.task_name == "WikipediaRetrievalMultilingual"
-        else "id"
-    )
-
-    if task.task_name == "CulturaViva-Retrieval":
-        corpus_ds = load_dataset(
-            path="lopozz/CulturaViva-Retrieval",
-            name="corpus",
-            split=task.split,
-        )
-    else:
-        corpus_ds = load_dataset(
-            path=f"mteb/{task.task_name}",
-            name=f"{lang_prefix}-corpus",
-            split=task.split,
-        )
-
-    return {
-        str(row[id_column]): str(row["text"])
-        for row in corpus_ds
-    }
-
-
-def load_queries(task: RetrievalTask) -> dict[str, str]:
-    lang_prefix = (
-        "ita" if task.task_name == "WebFAQRetrieval" else task.language
-    )
-    id_column = (
-        "_id"
-        if task.task_name == "WikipediaRetrievalMultilingual"
-        else "id"
-    )
-
-    if task.task_name == "CulturaViva-Retrieval":
-        queries_ds = load_dataset(
-            path="lopozz/CulturaViva-Retrieval",
-            name="queries",
-            split=task.split,
-        )
-    else:
-        queries_ds = load_dataset(
-            path=f"mteb/{task.task_name}",
-            name=f"{lang_prefix}-queries",
-            split=task.split,
-        )
-
-    return {
-        str(row[id_column]): str(row["text"])
-        for row in queries_ds
-    }
 
 
 def load_corpus(task: RetrievalTask) -> dict[str, str]:
@@ -1036,7 +976,8 @@ def evaluate_sparse_retrieval(
             )
 
         print_key_results(overall_summary, retrieval_summary, bucket_summary)
-        if results_path.exists(): print_fp_audit_results(fp_audit_results)
+        if results_path.exists(): 
+            print_fp_audit_results(fp_audit_results)
 
         metadata = {
             "model": model,
