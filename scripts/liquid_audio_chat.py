@@ -42,7 +42,7 @@ import contextlib
 import numpy as np
 import soundfile as sf
 
-from queue import Queue
+from queue import Empty, Queue
 from openai import OpenAI
 from prompt_toolkit import prompt
 from prompt_toolkit.history import InMemoryHistory
@@ -83,8 +83,10 @@ class AudioPlayer:
                 pcm_data = self.queue.get(timeout=0.1)
                 if self.stream:
                     self.stream.write(pcm_data)
-            except:
+            except Empty:
                 pass
+            except Exception:
+                print('[Audio playback thread: queue empty or error]')
 
     def start(self):
         """Prepare the audio player (stream starts on first samples)."""

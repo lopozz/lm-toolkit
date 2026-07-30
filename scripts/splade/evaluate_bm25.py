@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-
+# LEGACY: This script is a legacy evaluation script for BM25S on BEIR-style datasets. It is not part of the main MTEB evaluation pipeline and may be removed in future versions. For new evaluations, consider using the `evaluate_mteb.py` script instead.
 from __future__ import annotations
 
 import argparse
@@ -30,7 +30,17 @@ def parse_args() -> argparse.Namespace:
             "queries/<split>.jsonl, qrels/<split>.jsonl."
         ),
     )
- 
+
+    source_group.add_argument(
+        "--parquet-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Local directory containing flat <split>_corpus.parquet, "
+            "<split>_queries.parquet, <split>_qrels.parquet files."
+        ),
+    )
+
     source_group.add_argument(
         "--hf-repo-id",
         type=str,
@@ -95,7 +105,7 @@ def parse_args() -> argparse.Namespace:
 
     args = parser.parse_args()
 
-    if args.dataset_dir is None and args.hf_repo_id is None:
+    if args.dataset_dir is None and args.hf_repo_id is None and args.parquet_dir is None:
         args.dataset_dir = Path("wikinews_hard")
 
     return args
@@ -130,20 +140,10 @@ def normalize_query_row(row: dict[str, Any]) -> dict[str, str]:
 def load_local_dataset_rows(
     dataset_dir: Path,
     split: str,
-    max_corpus: int | None = None,
-    max_queries: int | None = None,
-    max_qrels: int | None = None,
 ) -> tuple[Dataset, Dataset, dict[str, set[str]], str]:
     corpus_rows = read_jsonl(dataset_dir / "corpus" / f"{split}.jsonl")
     query_rows = read_jsonl(dataset_dir / "queries" / f"{split}.jsonl")
     qrel_rows = read_jsonl(dataset_dir / "qrels" / f"{split}.jsonl")
-
-    if max_corpus is not None:
-        corpus_rows = corpus_rows[:max_corpus]
-    if max_queries is not None:
-        query_rows = query_rows[:max_queries]
-    if max_qrels is not None:
-        qrel_rows = qrel_rows[:max_qrels]
 
     corpus = Dataset.from_list([normalize_corpus_row(row) for row in corpus_rows])
     queries = Dataset.from_list([normalize_query_row(row) for row in query_rows])
@@ -168,23 +168,47 @@ def load_local_dataset_rows(
     return corpus, queries, relevant_docs, dataset_name
 
 
+def load_local_parquet_dataset_rows(
+    dataset_dir: Path,
+    split: str,
+) -> tuple[Dataset, Dataset, dict[str, set[str]], str]:
+    raw_corpus = Dataset.from_parquet(str(dataset_dir / f"{split}_corpus.parquet"))
+    raw_queries = Dataset.from_parquet(str(dataset_dir / f"{split}_queries.parquet"))
+    raw_qrels = Dataset.from_parquet(str(dataset_dir / f"{split}_qrels.parquet"))
+
+    corpus = Dataset.from_list([normalize_corpus_row(row) for row in raw_corpus])
+    queries = Dataset.from_list([normalize_query_row(row) for row in raw_queries])
+
+    valid_doc_ids = set(corpus["id"])
+    valid_query_ids = set(queries["id"])
+
+    relevant_docs: dict[str, set[str]] = defaultdict(set)
+
+    for row in raw_qrels:
+        score = float(row["score"])
+
+        if score > 0:
+            query_id = str(row["query-id"])
+            corpus_id = str(row["corpus-id"])
+
+            if query_id in valid_query_ids and corpus_id in valid_doc_ids:
+                relevant_docs[query_id].add(corpus_id)
+
+    dataset_name = dataset_dir.name
+
+    return corpus, queries, relevant_docs, dataset_name
+
+
 def load_hf_dataset_rows(
     repo_id: str,
     split: str,
     corpus_config: str = "corpus",
     queries_config: str = "queries",
     qrels_config: str = "qrels",
-    max_corpus: int | None = None,
-    max_queries: int | None = None,
-    max_qrels: int | None = None,
 ) -> tuple[Dataset, Dataset, dict[str, set[str]], str]:
     raw_corpus = load_dataset(repo_id, corpus_config, split=split)
     raw_queries = load_dataset(repo_id, queries_config, split=split)
     raw_qrels = load_dataset(repo_id, qrels_config, split=split)
-
-    raw_corpus = maybe_limit(raw_corpus, max_corpus)
-    raw_queries = maybe_limit(raw_queries, max_queries)
-    raw_qrels = maybe_limit(raw_qrels, max_qrels)
 
     corpus = Dataset.from_list([normalize_corpus_row(row) for row in raw_corpus])
     queries = Dataset.from_list([normalize_query_row(row) for row in raw_queries])
@@ -292,9 +316,6 @@ def main() -> None:
             corpus_config=args.hf_corpus_config,
             queries_config=args.hf_queries_config,
             qrels_config=args.hf_qrels_config,
-            max_corpus=args.max_corpus,
-            max_queries=args.max_queries,
-            max_qrels=args.max_qrels,
         )
         dataset_source = {
             "type": "huggingface",
@@ -303,13 +324,19 @@ def main() -> None:
             "queries_config": args.hf_queries_config,
             "qrels_config": args.hf_qrels_config,
         }
+    elif args.parquet_dir is not None:
+        corpus, queries, relevant_docs, dataset_name = load_local_parquet_dataset_rows(
+            dataset_dir=args.parquet_dir,
+            split=args.split,
+        )
+        dataset_source = {
+            "type": "local_parquet",
+            "dataset_dir": str(args.parquet_dir),
+        }
     else:
         corpus, queries, relevant_docs, dataset_name = load_local_dataset_rows(
             dataset_dir=args.dataset_dir,
             split=args.split,
-            max_corpus=args.max_corpus,
-            max_queries=args.max_queries,
-            max_qrels=args.max_qrels,
         )
         dataset_source = {
             "type": "local",
@@ -361,9 +388,6 @@ def main() -> None:
         "settings": {
             "stopwords": args.stopwords,
             "stemmer_language": args.stemmer_language,
-            "max_corpus": args.max_corpus,
-            "max_queries": args.max_queries,
-            "max_qrels": args.max_qrels,
         },
     }
 

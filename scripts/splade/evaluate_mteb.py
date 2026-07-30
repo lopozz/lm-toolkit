@@ -363,8 +363,8 @@ def describe_sparse_query_expansion(model) -> str:
     return "Sparse query expansion by model configuration: unknown"
 
 
-def load_sparse_model(model_name: str, query_expansion: bool) -> SparseEncoder:
-    if query_expansion:
+def load_sparse_model(model_name: str, inference_free: bool) -> SparseEncoder:
+    if not inference_free:
         return SparseEncoder(model_name)
 
     # Force the query side through a SparseStaticEmbedding (lexical reweighting
@@ -410,9 +410,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--overwrite-strategy", default="only-missing")
     parser.add_argument("--results-dir", type=Path, default=Path("./results"))
     parser.add_argument(
-        "--no-query-expansion",
-        action="store_false",
-        dest="query_expansion",
+        "--inference-free",
+        action="store_true",
+        dest="inference_free",
         help="Sparse models only: replace the query route with a "
         "SparseStaticEmbedding (lexical reweighting only, no MLM expansion).",
     )
@@ -476,7 +476,7 @@ def main():
         print(results)
 
     else:
-        model = load_sparse_model(model_name, args.query_expansion)
+        model = load_sparse_model(model_name, args.inference_free)
         print(describe_sparse_query_expansion(model))
         all_task_results = []
 
@@ -515,7 +515,7 @@ def main():
                     f"No sparse dataset mapping defined for task: {task_name}. "
                     "Add dataset_path, corpus_name, queries_name, qrels_name, and id_column."
                 )
-
+                        
             if overwrite_strategy != "always" and sparse_cache.has_result(
                 model_name, task_name, model_revision
             ):
