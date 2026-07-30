@@ -80,7 +80,7 @@ import mteb
 import argparse
 
 from pathlib import Path
-from datasets import load_dataset
+from datasets import Dataset, Features, Value, load_dataset
 from mteb.models import ModelMeta
 from sentence_transformers import SparseEncoder
 from mteb.models.model_meta import ScoringFunction
@@ -113,6 +113,79 @@ class CulturaVivaRetrieval(AbsTaskRetrieval):
         eval_langs=["ita-Latn"],
         main_score="ndcg_at_10",
     )
+
+
+class MMarcoITRetrieval(AbsTaskRetrieval):
+    """Custom task: local parquet-only dataset, not hosted on the Hub.
+    Overrides load_data() to read data/mmarco_it_dev_small_50k_len50_400
+    directly instead of fetching self.metadata.dataset["path"] from the Hub,
+    so this works through both the sparse branch and mteb.evaluate()."""
+
+    metadata = TaskMetadata(
+        name="MMarco-IT-Retrieval",
+        description="mmarco Italian retrieval dev sample (50k docs, length 50-400).",
+        reference="https://huggingface.co/datasets/unicamp-dl/mmarco",
+        dataset={
+            "path": "local/mmarco_it_dev_small_50k_len50_400",
+            "revision": "local",
+        },
+        type="Retrieval",
+        category="t2t",
+        modalities=["text"],
+        eval_splits=["test"],
+        eval_langs=["ita-Latn"],
+        main_score="ndcg_at_10",
+    )
+
+    def load_data(self, num_proc: int | None = None, **kwargs) -> None:
+        if self.data_loaded:
+            return
+
+        local_dir = Path("data/mmarco_it_dev_small_50k_len50_400")
+        split = self.eval_splits[0]
+
+        corpus_ds = Dataset.from_parquet(str(local_dir / f"{split}_corpus.parquet"))
+        if "_id" in corpus_ds.column_names:
+            corpus_ds = corpus_ds.cast_column("_id", Value("string")).rename_column("_id", "id")
+
+        queries_ds = Dataset.from_parquet(str(local_dir / f"{split}_queries.parquet"))
+        if "_id" in queries_ds.column_names:
+            queries_ds = queries_ds.cast_column("_id", Value("string")).rename_column("_id", "id")
+
+        qrels_ds = Dataset.from_parquet(str(local_dir / f"{split}_qrels.parquet"))
+        qrels_ds = qrels_ds.select_columns(["query-id", "corpus-id", "score"])
+        qrels_ds = qrels_ds.cast(
+            Features(
+                {
+                    "query-id": Value("string"),
+                    "corpus-id": Value("string"),
+                    "score": Value("int32"),
+                }
+            )
+        )
+        qrels_ds = qrels_ds.to_polars()
+        qrels_dict = {
+            query_id[0]: dict(zip(group["corpus-id"], group["score"]))
+            for query_id, group in qrels_ds.group_by("query-id", maintain_order=False)
+        }
+
+        # Matches RetrievalDatasetLoader.load(): only keep queries that have qrels.
+        ids_to_keep = set(qrels_dict.keys())
+        indices = [i for i, id_ in enumerate(queries_ds["id"]) if id_ in ids_to_keep]
+        queries_ds = queries_ds.select(indices)
+
+        self.dataset = {
+            "default": {
+                split: {
+                    "corpus": corpus_ds,
+                    "queries": queries_ds,
+                    "relevant_docs": qrels_dict,
+                    "top_ranked": None,
+                }
+            }
+        }
+        self.dataset_transform(num_proc=num_proc)
+        self.data_loaded = True
 
 
 SPARSE_MODELS = {
@@ -384,6 +457,7 @@ def main():
     tasks = [t for t in tasks if t.metadata.name not in excluded]
     # Not registered in MTEB's task registry, so mteb.get_tasks() never returns it.
     tasks.append(CulturaVivaRetrieval())
+    tasks.append(MMarcoITRetrieval())
 
     if not is_sparse_model(model_name):
         model = mteb.get_model(model_name)
@@ -435,11 +509,16 @@ def main():
                 "WebFAQRetrieval",
                 "WikipediaRetrievalMultilingual",
                 "CulturaViva-Retrieval",
+                "MMarco-IT-Retrieval",
             ]:
                 raise ValueError(
                     f"No sparse dataset mapping defined for task: {task_name}. "
                     "Add dataset_path, corpus_name, queries_name, qrels_name, and id_column."
                 )
+            if task_name not in [
+                "MMarco-IT-Retrieval"
+            ]: 
+                continue
 
             if overwrite_strategy != "always" and sparse_cache.has_result(
                 model_name, task_name, model_revision
@@ -452,38 +531,50 @@ def main():
 
             # Dataset mapping
             # Add more tasks here as needed.
-            if task_name == "CulturaViva-Retrieval":
-                # Hosted directly (not under the mteb/ org), unprefixed config names.
-                dataset_path = "lopozz/CulturaViva-Retrieval"
+            if task_name == "MMarco-IT-Retrieval":
+                # Local parquet-only dataset, not hosted on the Hub -- read
+                # the flat <split>_corpus.parquet/... files directly instead
+                # of going through load_dataset(path=..., name=..., ...).
+                local_dir = Path("data/mmarco_it_dev_small_50k_len50_400")
                 hf_subset = "default"
-                corpus_name = "corpus"
-                queries_name = "queries"
-                qrels_name = "qrels"
-                id_column = "id"
-            else:
-                dataset_path = f"mteb/{task_name}"
-                lang_prefix = "ita" if task_name == "WebFAQRetrieval" else "it"
-                hf_subset = lang_prefix
-                corpus_name = f"{lang_prefix}-corpus"
-                queries_name = f"{lang_prefix}-queries"
-                qrels_name = f"{lang_prefix}-qrels"
-                id_column = "_id" if task_name == "WikipediaRetrievalMultilingual" else "id"
+                id_column = "_id"
 
-            corpus_ds = load_dataset(
-                path=dataset_path,
-                name=corpus_name,
-                split=split,
-            )
-            queries_ds = load_dataset(
-                path=dataset_path,
-                name=queries_name,
-                split=split,
-            )
-            qrels_ds = load_dataset(
-                path=dataset_path,
-                name=qrels_name,
-                split=split,
-            )
+                corpus_ds = Dataset.from_parquet(str(local_dir / f"{split}_corpus.parquet"))
+                queries_ds = Dataset.from_parquet(str(local_dir / f"{split}_queries.parquet"))
+                qrels_ds = Dataset.from_parquet(str(local_dir / f"{split}_qrels.parquet"))
+            else:
+                if task_name == "CulturaViva-Retrieval":
+                    # Hosted directly (not under the mteb/ org), unprefixed config names.
+                    dataset_path = "lopozz/CulturaViva-Retrieval"
+                    hf_subset = "default"
+                    corpus_name = "corpus"
+                    queries_name = "queries"
+                    qrels_name = "qrels"
+                    id_column = "id"
+                else:
+                    dataset_path = f"mteb/{task_name}"
+                    lang_prefix = "ita" if task_name == "WebFAQRetrieval" else "it"
+                    hf_subset = lang_prefix
+                    corpus_name = f"{lang_prefix}-corpus"
+                    queries_name = f"{lang_prefix}-queries"
+                    qrels_name = f"{lang_prefix}-qrels"
+                    id_column = "_id" if task_name == "WikipediaRetrievalMultilingual" else "id"
+
+                corpus_ds = load_dataset(
+                    path=dataset_path,
+                    name=corpus_name,
+                    split=split,
+                )
+                queries_ds = load_dataset(
+                    path=dataset_path,
+                    name=queries_name,
+                    split=split,
+                )
+                qrels_ds = load_dataset(
+                    path=dataset_path,
+                    name=qrels_name,
+                    split=split,
+                )
 
             queries = {str(row[id_column]): row["text"] for row in queries_ds}
             corpus = {str(row[id_column]): row["text"] for row in corpus_ds}
