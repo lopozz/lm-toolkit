@@ -113,6 +113,83 @@ def load_queries(task: RetrievalTask) -> dict[str, str]:
     }
 
 
+def load_corpus(task: RetrievalTask) -> dict[str, str]:
+    lang_prefix = (
+        "ita" if task.task_name == "WebFAQRetrieval" else task.language
+    )
+
+    if task.task_name == "CulturaViva-Retrieval":
+        corpus_ds = load_dataset(
+            path="lopozz/CulturaViva-Retrieval",
+            name="corpus",
+            split=task.split,
+        )
+    else:
+        dataset_path = f"mteb/{task.task_name}"
+
+        try:
+            corpus_ds = load_dataset(
+                path=dataset_path,
+                name=f"{lang_prefix}-corpus",
+                split=task.split,
+            )
+        except ValueError as error:
+            # Fall back for datasets using plain configurations:
+            # corpus, queries and qrels.
+            if "BuilderConfig" not in str(error):
+                raise
+
+            corpus_ds = load_dataset(
+                path=dataset_path,
+                name="corpus",
+                split=task.split,
+            )
+
+    id_column = "_id" if "_id" in corpus_ds.column_names else "id"
+
+    return {
+        str(row[id_column]): str(row["text"])
+        for row in corpus_ds
+    }
+
+
+def load_queries(task: RetrievalTask) -> dict[str, str]:
+    lang_prefix = (
+        "ita" if task.task_name == "WebFAQRetrieval" else task.language
+    )
+
+    if task.task_name == "CulturaViva-Retrieval":
+        queries_ds = load_dataset(
+            path="lopozz/CulturaViva-Retrieval",
+            name="queries",
+            split=task.split,
+        )
+    else:
+        dataset_path = f"mteb/{task.task_name}"
+
+        try:
+            queries_ds = load_dataset(
+                path=dataset_path,
+                name=f"{lang_prefix}-queries",
+                split=task.split,
+            )
+        except ValueError as error:
+            if "BuilderConfig" not in str(error):
+                raise
+
+            queries_ds = load_dataset(
+                path=dataset_path,
+                name="queries",
+                split=task.split,
+            )
+
+    id_column = "_id" if "_id" in queries_ds.column_names else "id"
+
+    return {
+        str(row[id_column]): str(row["text"])
+        for row in queries_ds
+    }
+
 def tensor_expansion(vector: Any) -> Expansion:
     if not torch.is_tensor(vector):
         vector = torch.as_tensor(vector)
