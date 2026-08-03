@@ -7,14 +7,24 @@ analysis in lm_toolkit/benchmarks/sparse_analysis.py.
 
 Typical usage:
 
-    python3 scripts/splade/analyze_dataset_stats.py \\
-      --tokenizer nickprock/splade-bert-base-italian-xxl-uncased-cv \\
+    python3 scripts/splade/analyze_dataset_stats.py \
+      --tokenizer nickprock/splade-bert-base-italian-xxl-uncased-cv \
       --task-name MuPLeR-retrieval --language it
+
+Or against a local dataset directory (expects {split}_corpus.parquet and
+{split}_queries.parquet inside it) instead of an MTEB task:
+
+    python3 scripts/splade/analyze_dataset_stats.py \
+      --tokenizer nickprock/splade-bert-base-italian-xxl-uncased-cv \
+      --data-dir data/sberquad_mteb_itquad --split test
 """
 
 import argparse
 
 import pandas as pd
+
+from pathlib import Path
+from datasets import Dataset
 from transformers import AutoTokenizer
 
 from lm_toolkit.benchmarks.sparse_analysis import (
@@ -29,6 +39,33 @@ from lm_toolkit.benchmarks.sparse_analysis import (
 
 _SENTINEL_MAX_LENGTH = 100_000  # unset tokenizers report an unusably large sentinel
 
+def load_local_corpus(data_dir: Path, split: str) -> dict[str, str]:
+    dataset = Dataset.from_parquet(
+        str(data_dir / f"{split}_corpus.parquet")
+    )
+
+    return {
+        str(row["_id"]): "\n".join(
+            part
+            for part in (
+                str(row.get("title") or "").strip(),
+                str(row["text"] or "").strip(),
+            )
+            if part
+        )
+        for row in dataset
+    }
+
+
+def load_local_queries(data_dir: Path, split: str) -> dict[str, str]:
+    dataset = Dataset.from_parquet(
+        str(data_dir / f"{split}_queries.parquet")
+    )
+
+    return {
+        str(row["_id"]): str(row["text"] or "").strip()
+        for row in dataset
+    }
 
 def resolve_max_length(tokenizer: AutoTokenizer) -> int:
     max_length = tokenizer.model_max_length
@@ -69,19 +106,23 @@ def summarize_overall_lengths(frame: pd.DataFrame) -> pd.DataFrame:
     records = [
         {
             "metric": "documents",
+            "min": float("nan"),
             "p10": float("nan"),
             "mean": len(frame),
             "median": float("nan"),
             "p90": float("nan"),
+            "max": float("nan"),
         }
     ]
     records.extend(
         {
             "metric": label,
+            "min": frame[column].min(),
             "p10": p10(frame[column]),
             "mean": frame[column].mean(),
             "median": frame[column].median(),
             "p90": p90(frame[column]),
+            "max": frame[column].max(),
         }
         for column, label in length_metrics
     )
@@ -113,6 +154,30 @@ def summarize_bucket_lengths(frame: pd.DataFrame) -> pd.DataFrame:
     return summary
 
 
+def ascii_histogram(values: pd.Series, bins: int = 20, width: int = 50) -> str:
+    total = len(values)
+    min_value, max_value = values.min(), values.max()
+    if min_value == max_value:
+        return f"{min_value:8.1f} | {'#' * width} {total} (100.0%)"
+
+    bin_width = (max_value - min_value) / bins
+    counts = [0] * bins
+    for value in values:
+        index = min(int((value - min_value) / bin_width), bins - 1)
+        counts[index] += 1
+
+    max_count = max(counts) or 1
+    lines = []
+    for index, count in enumerate(counts):
+        low = min_value + index * bin_width
+        high = low + bin_width
+        bar = "#" * round(width * count / max_count)
+        percentage = 100 * count / total
+        lines.append(f"{low:8.1f} - {high:8.1f} | {bar} {count} ({percentage:.1f}%)")
+
+    return "\n".join(lines)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -124,29 +189,58 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--language", default="it")
     parser.add_argument("--split", default="test")
     parser.add_argument("--num-buckets", type=int, default=5)
+    parser.add_argument("--data-dir", type=Path, default=None)
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    task = RetrievalTask(task_name=args.task_name, language=args.language, split=args.split)
+    # task = RetrievalTask(task_name=args.task_name, language=args.language, split=args.split)
+    # tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
+    # encoder_max_length = resolve_max_length(tokenizer)
+
+    # texts_by_label = {
+    #     "document": load_corpus(task),
+    #     "query": load_queries(task),
+    # }
+
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
     encoder_max_length = resolve_max_length(tokenizer)
 
-    texts_by_label = {
-        "document": load_corpus(task),
-        "query": load_queries(task),
-    }
+    if args.data_dir is not None:
+        dataset_name = args.data_dir.name
+
+        texts_by_label = {
+            "document": load_local_corpus(args.data_dir, args.split),
+            "query": load_local_queries(args.data_dir, args.split),
+        }
+    else:
+        task = RetrievalTask(
+            task_name=args.task_name,
+            language=args.language,
+            split=args.split,
+        )
+        dataset_name = task.task_name
+
+        texts_by_label = {
+            "document": load_corpus(task),
+            "query": load_queries(task),
+        }
 
     for label, texts_by_id in texts_by_label.items():
         frame = build_length_frame(texts_by_id, tokenizer, encoder_max_length)
         frame = add_dataset_quantile_buckets(frame, args.num_buckets)
 
-        print(f"\n{task.task_name} -- {label} overall summary")
+        # print(f"\n{task.task_name} -- {label} overall summary")
+        print(f"\n{dataset_name} -- {label} overall summary")
         print(summarize_overall_lengths(frame).round(3).to_string(index=False))
 
-        print(f"\n{task.task_name} -- {label} bucketed summary")
+        # print(f"\n{task.task_name} -- {label} bucketed summary")
+        print(f"\n{dataset_name} -- {label} bucketed summary")
         print(transpose_by_stat(summarize_bucket_lengths(frame), "bucket").to_string(index=False))
+
+        print(f"\n{dataset_name} -- {label} effective token length histogram")
+        print(ascii_histogram(frame["effective_token_length"]))
 
 
 if __name__ == "__main__":
