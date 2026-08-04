@@ -80,118 +80,49 @@ import mteb
 import argparse
 
 from pathlib import Path
-from datasets import Dataset, Features, Value, load_dataset
+from datasets import Dataset, load_dataset
 from mteb.models import ModelMeta
 from sentence_transformers import SparseEncoder
 from mteb.models.model_meta import ScoringFunction
-from mteb.abstasks.retrieval import AbsTaskRetrieval
-from mteb.abstasks.task_metadata import TaskMetadata
 from importlib.metadata import PackageNotFoundError, version
 from sentence_transformers.sentence_transformer.modules import Router, Transformer
 from sentence_transformers.sparse_encoder.modules import SparseStaticEmbedding, SpladePooling
 from sentence_transformers.sparse_encoder.evaluation import SparseInformationRetrievalEvaluator
 
 from lm_toolkit.cache import ResultCache as SparseResultCache
-
-
-class CulturaVivaRetrieval(AbsTaskRetrieval):
-    """Custom task: not registered in MTEB, hosted outside the mteb/ org."""
-
-    metadata = TaskMetadata(
-        name="CulturaViva-Retrieval",
-        description="Italian retrieval dataset covering culturally-grounded, "
-        "long-form generated content.",
-        reference="https://huggingface.co/datasets/lopozz/CulturaViva-Retrieval",
-        dataset={
-            "path": "lopozz/CulturaViva-Retrieval",
-            "revision": "2347b286719a879cc5129cea5c4c5d3fa813dd1b",
-        },
-        type="Retrieval",
-        category="t2t",
-        modalities=["text"],
-        eval_splits=["test"],
-        eval_langs=["ita-Latn"],
-        main_score="ndcg_at_10",
-    )
-
-
-class MMarcoITRetrieval(AbsTaskRetrieval):
-    """Custom task: local parquet-only dataset, not hosted on the Hub.
-    Overrides load_data() to read data/mmarco_it_dev_small_50k_len50_400
-    directly instead of fetching self.metadata.dataset["path"] from the Hub,
-    so this works through both the sparse branch and mteb.evaluate()."""
-
-    metadata = TaskMetadata(
-        name="MMarco-IT-Retrieval",
-        description="mmarco Italian retrieval dev sample (50k docs, length 50-400).",
-        reference="https://huggingface.co/datasets/unicamp-dl/mmarco",
-        dataset={
-            "path": "local/mmarco_it_dev_small_50k_len50_400",
-            "revision": "local",
-        },
-        type="Retrieval",
-        category="t2t",
-        modalities=["text"],
-        eval_splits=["test"],
-        eval_langs=["ita-Latn"],
-        main_score="ndcg_at_10",
-    )
-
-    def load_data(self, num_proc: int | None = None, **kwargs) -> None:
-        if self.data_loaded:
-            return
-
-        local_dir = Path("data/mmarco_it_dev_small_50k_len50_400")
-        split = self.eval_splits[0]
-
-        corpus_ds = Dataset.from_parquet(str(local_dir / f"{split}_corpus.parquet"))
-        if "_id" in corpus_ds.column_names:
-            corpus_ds = corpus_ds.cast_column("_id", Value("string")).rename_column("_id", "id")
-
-        queries_ds = Dataset.from_parquet(str(local_dir / f"{split}_queries.parquet"))
-        if "_id" in queries_ds.column_names:
-            queries_ds = queries_ds.cast_column("_id", Value("string")).rename_column("_id", "id")
-
-        qrels_ds = Dataset.from_parquet(str(local_dir / f"{split}_qrels.parquet"))
-        qrels_ds = qrels_ds.select_columns(["query-id", "corpus-id", "score"])
-        qrels_ds = qrels_ds.cast(
-            Features(
-                {
-                    "query-id": Value("string"),
-                    "corpus-id": Value("string"),
-                    "score": Value("int32"),
-                }
-            )
-        )
-        qrels_ds = qrels_ds.to_polars()
-        qrels_dict = {
-            query_id[0]: dict(zip(group["corpus-id"], group["score"]))
-            for query_id, group in qrels_ds.group_by("query-id", maintain_order=False)
-        }
-
-        # Matches RetrievalDatasetLoader.load(): only keep queries that have qrels.
-        ids_to_keep = set(qrels_dict.keys())
-        indices = [i for i, id_ in enumerate(queries_ds["id"]) if id_ in ids_to_keep]
-        queries_ds = queries_ds.select(indices)
-
-        self.dataset = {
-            "default": {
-                split: {
-                    "corpus": corpus_ds,
-                    "queries": queries_ds,
-                    "relevant_docs": qrels_dict,
-                    "top_ranked": None,
-                }
-            }
-        }
-        self.dataset_transform(num_proc=num_proc)
-        self.data_loaded = True
+from lm_toolkit.tasks.retrieval.ita import CulturaVivaRetrieval, MMarcoITRetrieval, MMarcoITRetrieval2
+from lm_toolkit.tasks.retrieval.multilingual import (
+    GermanDPRRetrieval,
+    JaQuADRetrieval,
+    NorQuADRetrieval,
+    SberQuADRetrieval,
+)
 
 
 SPARSE_MODELS = {
     "opensearch-project/opensearch-neural-sparse-encoding-multilingual-v1",
     "nickprock/splade-bert-base-italian-xxl-uncased-cv",
     "models/splade-bert-base-italian-xxl-uncased-cv",
+}
+
+# Hub-hosted retrieval tasks (everything except the local-only MMarco ones):
+# hf_subset selects which language config to evaluate ("default" means the
+# config names are unprefixed: corpus/queries/qrels rather than it-corpus/...).
+HOSTED_TASK_CONFIGS = {
+    "CulturaViva-Retrieval": {"hf_subset": "default", "id_column": "_id"},
+    "NorQuADRetrieval": {"hf_subset": "it", "id_column": "_id"},
+    "JaQuADRetrieval": {"hf_subset": "it", "id_column": "_id"},
+    "SberQuADRetrieval": {"hf_subset": "it", "id_column": "_id"},
+    "GermanDPRRetrieval": {"hf_subset": "it", "id_column": "_id"},
+    "WikipediaRetrievalMultilingual": {"hf_subset": "it", "id_column": "_id"},
+    "MuPLeR-retrieval": {"hf_subset": "it", "id_column": "id"},
+    "WebFAQRetrieval": {"hf_subset": "ita", "id_column": "id"},
+}
+
+# Local-only retrieval tasks: not hosted on the Hub, read directly from parquet.
+LOCAL_TASK_DIRS = {
+    "MMarco-IT-Retrieval": Path("data/mmarco_it_dev_small_50k_len50_400"),
+    "MMarco-IT-2-Retrieval": Path("data/mmarco_it_dev_small_50k_len1_500"),
 }
 
 
@@ -458,6 +389,11 @@ def main():
     # Not registered in MTEB's task registry, so mteb.get_tasks() never returns it.
     tasks.append(CulturaVivaRetrieval())
     tasks.append(MMarcoITRetrieval())
+    tasks.append(MMarcoITRetrieval2())
+    tasks.append(NorQuADRetrieval())
+    tasks.append(JaQuADRetrieval())
+    tasks.append(SberQuADRetrieval())
+    tasks.append(GermanDPRRetrieval())
 
     if not is_sparse_model(model_name):
         model = mteb.get_model(model_name)
@@ -504,18 +440,12 @@ def main():
 
         for task in tasks:
             task_name = task.metadata.name
-            if task_name not in [
-                "MuPLeR-retrieval",
-                "WebFAQRetrieval",
-                "WikipediaRetrievalMultilingual",
-                "CulturaViva-Retrieval",
-                "MMarco-IT-Retrieval",
-            ]:
+            if task_name not in HOSTED_TASK_CONFIGS and task_name not in LOCAL_TASK_DIRS:
                 raise ValueError(
                     f"No sparse dataset mapping defined for task: {task_name}. "
                     "Add dataset_path, corpus_name, queries_name, qrels_name, and id_column."
                 )
-                        
+            
             if overwrite_strategy != "always" and sparse_cache.has_result(
                 model_name, task_name, model_revision
             ):
@@ -525,13 +455,8 @@ def main():
 
             print(f"Evaluating sparse model on task: {task_name}")
 
-            # Dataset mapping
-            # Add more tasks here as needed.
-            if task_name == "MMarco-IT-Retrieval":
-                # Local parquet-only dataset, not hosted on the Hub -- read
-                # the flat <split>_corpus.parquet/... files directly instead
-                # of going through load_dataset(path=..., name=..., ...).
-                local_dir = Path("data/mmarco_it_dev_small_50k_len50_400")
+            if task_name in LOCAL_TASK_DIRS:
+                local_dir = LOCAL_TASK_DIRS[task_name]
                 hf_subset = "default"
                 id_column = "_id"
 
@@ -539,22 +464,15 @@ def main():
                 queries_ds = Dataset.from_parquet(str(local_dir / f"{split}_queries.parquet"))
                 qrels_ds = Dataset.from_parquet(str(local_dir / f"{split}_qrels.parquet"))
             else:
-                if task_name == "CulturaViva-Retrieval":
-                    # Hosted directly (not under the mteb/ org), unprefixed config names.
-                    dataset_path = "lopozz/CulturaViva-Retrieval"
-                    hf_subset = "default"
-                    corpus_name = "corpus"
-                    queries_name = "queries"
-                    qrels_name = "qrels"
-                    id_column = "id"
-                else:
-                    dataset_path = f"mteb/{task_name}"
-                    lang_prefix = "ita" if task_name == "WebFAQRetrieval" else "it"
-                    hf_subset = lang_prefix
-                    corpus_name = f"{lang_prefix}-corpus"
-                    queries_name = f"{lang_prefix}-queries"
-                    qrels_name = f"{lang_prefix}-qrels"
-                    id_column = "_id" if task_name == "WikipediaRetrievalMultilingual" else "id"
+                task_config = HOSTED_TASK_CONFIGS[task_name]
+                hf_subset = task_config["hf_subset"]
+                id_column = task_config["id_column"]
+                dataset_path = task.metadata.dataset["path"]
+
+                prefix = "" if hf_subset == "default" else f"{hf_subset}-"
+                corpus_name = f"{prefix}corpus"
+                queries_name = f"{prefix}queries"
+                qrels_name = f"{prefix}qrels"
 
                 corpus_ds = load_dataset(
                     path=dataset_path,
