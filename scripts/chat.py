@@ -1,5 +1,7 @@
 from openai import OpenAI
 
+from lm_toolkit.chats import stream_chat_completion
+
 client = OpenAI(
     base_url="http://127.0.0.1:8080/v1",
     api_key="local",
@@ -65,24 +67,16 @@ while True:
         "content": user_text,
     })
 
-    stream = client.chat.completions.create(
+    print("\nModello: ", end="", flush=True)
+
+    answer = stream_chat_completion(
+        client=client,
         model="local",
         messages=messages,
         temperature=1,
         max_tokens=500,
-        stream=True,
+        on_delta=lambda delta: print(delta, end="", flush=True),
     )
-
-    print("\nModello: ", end="", flush=True)
-
-    answer = ""
-
-    for chunk in stream:
-        content = chunk.choices[0].delta.content
-
-        if content:
-            print(content, end="", flush=True)
-            answer += content
 
     print()
 
