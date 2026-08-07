@@ -10,10 +10,11 @@ import pandas as pd
 from typing import Any
 from pathlib import Path
 from rich.progress import track
-from datasets import load_dataset
 from dataclasses import dataclass
 from collections import defaultdict
 from sentence_transformers import SparseEncoder
+
+from lm_toolkit.tasks.registry import ALL_TASK_NAMES, load_retrieval_dataset, resolve_hf_subset, resolve_id_column
 
 DOCUMENT_METRICS = (
     "active_dims",
@@ -37,12 +38,15 @@ FIXED_LENGTH_BUCKETS: tuple[tuple[str, int, int | None], ...] = (
     (">150", 151, None),
 )
 
-DEFAULT_TASK_NAMES = (
-    "CulturaViva-Retrieval",
-    "MuPLeR-retrieval",
-    "WikipediaRetrievalMultilingual",
-    "WebFAQRetrieval",
+FIXED_LENGTH_BUCKETS: tuple[tuple[str, int, int | None], ...] = (
+    ("0-49", 0, 49),
+    ("50-99", 50, 99),
+    ("100-199", 100, 199),
+    ("200-299", 200, 299),
+    ("300-399", 300, 399),
+    (">400", 400, None),
 )
+
 
 Expansion = list[dict[int, Any]]
 
@@ -54,38 +58,8 @@ class RetrievalTask:
 
 
 def load_corpus(task: RetrievalTask) -> dict[str, str]:
-    lang_prefix = (
-        "ita" if task.task_name == "WebFAQRetrieval" else task.language
-    )
-
-    if task.task_name == "CulturaViva-Retrieval":
-        corpus_ds = load_dataset(
-            path="lopozz/CulturaViva-Retrieval",
-            name="corpus",
-            split=task.split,
-        )
-    else:
-        dataset_path = f"mteb/{task.task_name}"
-
-        try:
-            corpus_ds = load_dataset(
-                path=dataset_path,
-                name=f"{lang_prefix}-corpus",
-                split=task.split,
-            )
-        except ValueError as error:
-            # Fall back for datasets using plain configurations:
-            # corpus, queries and qrels.
-            if "BuilderConfig" not in str(error):
-                raise
-
-            corpus_ds = load_dataset(
-                path=dataset_path,
-                name="corpus",
-                split=task.split,
-            )
-
-    id_column = "_id" if "_id" in corpus_ds.column_names else "id"
+    corpus_ds = load_retrieval_dataset(task.task_name, "corpus", task.split, task.language)
+    id_column = resolve_id_column(task.task_name)
 
     return {
         str(row[id_column]): str(row["text"])
@@ -94,36 +68,8 @@ def load_corpus(task: RetrievalTask) -> dict[str, str]:
 
 
 def load_queries(task: RetrievalTask) -> dict[str, str]:
-    lang_prefix = (
-        "ita" if task.task_name == "WebFAQRetrieval" else task.language
-    )
-
-    if task.task_name == "CulturaViva-Retrieval":
-        queries_ds = load_dataset(
-            path="lopozz/CulturaViva-Retrieval",
-            name="queries",
-            split=task.split,
-        )
-    else:
-        dataset_path = f"mteb/{task.task_name}"
-
-        try:
-            queries_ds = load_dataset(
-                path=dataset_path,
-                name=f"{lang_prefix}-queries",
-                split=task.split,
-            )
-        except ValueError as error:
-            if "BuilderConfig" not in str(error):
-                raise
-
-            queries_ds = load_dataset(
-                path=dataset_path,
-                name="queries",
-                split=task.split,
-            )
-
-    id_column = "_id" if "_id" in queries_ds.column_names else "id"
+    queries_ds = load_retrieval_dataset(task.task_name, "queries", task.split, task.language)
+    id_column = resolve_id_column(task.task_name)
 
     return {
         str(row[id_column]): str(row["text"])
@@ -482,24 +428,11 @@ def print_key_results(
 
 
 def task_hf_subset(task: RetrievalTask) -> str:
-    if task.task_name == "CulturaViva-Retrieval":
-        return "default"
-    if task.task_name == "WebFAQRetrieval":
-        return "ita"
-    return task.language
+    return resolve_hf_subset(task.task_name, task.language)
 
 
 def load_qrels(task: RetrievalTask) -> dict[str, set[str]]:
-    lang_prefix = "ita" if task.task_name == "WebFAQRetrieval" else task.language
-
-    if task.task_name == "CulturaViva-Retrieval":
-        qrels_ds = load_dataset(
-            path="lopozz/CulturaViva-Retrieval", name="qrels", split=task.split
-        )
-    else:
-        qrels_ds = load_dataset(
-            path=f"mteb/{task.task_name}", name=f"{lang_prefix}-qrels", split=task.split
-        )
+    qrels_ds = load_retrieval_dataset(task.task_name, "qrels", task.split, task.language)
 
     relevant_docs: dict[str, set[str]] = defaultdict(set)
     for row in qrels_ds:
@@ -891,16 +824,16 @@ def evaluate_sparse_retrieval(
     batch_size: int = 16,
 ) -> list[dict[str, Any]]:
     for task_config in tasks:
-        if task_config["task_name"] not in DEFAULT_TASK_NAMES:
+        if task_config["task_name"] not in ALL_TASK_NAMES:
             raise ValueError(
                 f"Unsupported task: {task_config['task_name']!r}. "
-                f"Must be one of: {sorted(DEFAULT_TASK_NAMES)}"
+                f"Must be one of: {sorted(ALL_TASK_NAMES)}"
             )
 
     backend.eval()
 
     num_buckets = 5
-    fixed_buckets = None  # set to FIXED_LENGTH_BUCKETS to use fixed absolute-length ranges instead
+    fixed_buckets = FIXED_LENGTH_BUCKETS  # set to FIXED_LENGTH_BUCKETS to use fixed absolute-length ranges instead
     safe_model_name = model.replace("/", "__")
 
     results: list[dict[str, Any]] = []
