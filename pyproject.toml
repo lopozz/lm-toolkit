@@ -10,7 +10,6 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "accelerate>=1.13.0",
-    "mteb[bm25s,xet]>=2.12.16",
     "openai>=2.40.0",
     "pyyaml>=6.0.0",
     "ruff>=0.15.10",
@@ -29,4 +28,8 @@ audio = [
 ]
 graphs = [
     "matplotlib>=3.11.1",
+]
+splade = [
+    "ir-datasets>=0.6.3",
+    "mteb[bm25s,xet]>=2.27",
 ]
