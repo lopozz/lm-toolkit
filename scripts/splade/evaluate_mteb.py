@@ -80,7 +80,6 @@ import mteb
 import argparse
 
 from pathlib import Path
-from datasets import Dataset, load_dataset
 from mteb.models import ModelMeta
 from sentence_transformers import SparseEncoder
 from mteb.models.model_meta import ScoringFunction
@@ -90,6 +89,12 @@ from sentence_transformers.sparse_encoder.modules import SparseStaticEmbedding, 
 from sentence_transformers.sparse_encoder.evaluation import SparseInformationRetrievalEvaluator
 
 from lm_toolkit.cache import ResultCache as SparseResultCache
+from lm_toolkit.tasks.registry import (
+    ALL_TASK_NAMES,
+    load_retrieval_dataset,
+    resolve_hf_subset,
+    resolve_id_column,
+)
 from lm_toolkit.tasks.retrieval.ita import CulturaVivaRetrieval, MMarcoITRetrieval, MMarcoITRetrieval2
 from lm_toolkit.tasks.retrieval.multilingual import (
     GermanDPRRetrieval,
@@ -103,26 +108,6 @@ SPARSE_MODELS = {
     "opensearch-project/opensearch-neural-sparse-encoding-multilingual-v1",
     "nickprock/splade-bert-base-italian-xxl-uncased-cv",
     "models/splade-bert-base-italian-xxl-uncased-cv",
-}
-
-# Hub-hosted retrieval tasks (everything except the local-only MMarco ones):
-# hf_subset selects which language config to evaluate ("default" means the
-# config names are unprefixed: corpus/queries/qrels rather than it-corpus/...).
-HOSTED_TASK_CONFIGS = {
-    "CulturaViva-Retrieval": {"hf_subset": "default", "id_column": "_id"},
-    "NorQuADRetrieval": {"hf_subset": "it", "id_column": "_id"},
-    "JaQuADRetrieval": {"hf_subset": "it", "id_column": "_id"},
-    "SberQuADRetrieval": {"hf_subset": "it", "id_column": "_id"},
-    "GermanDPRRetrieval": {"hf_subset": "it", "id_column": "_id"},
-    "WikipediaRetrievalMultilingual": {"hf_subset": "it", "id_column": "_id"},
-    "MuPLeR-retrieval": {"hf_subset": "it", "id_column": "id"},
-    "WebFAQRetrieval": {"hf_subset": "ita", "id_column": "id"},
-}
-
-# Local-only retrieval tasks: not hosted on the Hub, read directly from parquet.
-LOCAL_TASK_DIRS = {
-    "MMarco-IT-Retrieval": Path("data/mmarco_it_dev_small_50k_len50_400"),
-    "MMarco-IT-2-Retrieval": Path("data/mmarco_it_dev_small_50k_len1_500"),
 }
 
 
@@ -334,7 +319,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--config-path",
         type=Path,
-        default=Path("./configs/ds/mteg-retrieval-ita.yml"),
+        default=Path("./configs/ds/mteb-retrieval-ita.yml"),
         help="Dataset task configuration YAML.",
     )
     parser.add_argument("--batch-size", type=int, default=16)
@@ -389,11 +374,17 @@ def main():
     # Not registered in MTEB's task registry, so mteb.get_tasks() never returns it.
     tasks.append(CulturaVivaRetrieval())
     tasks.append(MMarcoITRetrieval())
-    tasks.append(MMarcoITRetrieval2())
+    # tasks.append(MMarcoITRetrieval2())
     tasks.append(NorQuADRetrieval())
     tasks.append(JaQuADRetrieval())
     tasks.append(SberQuADRetrieval())
     tasks.append(GermanDPRRetrieval())
+
+    tasks = [
+        t for t in tasks if t.metadata.name not in [
+            "WebFAQRetrieval"
+        ]
+    ]
 
     if not is_sparse_model(model_name):
         model = mteb.get_model(model_name)
@@ -440,12 +431,12 @@ def main():
 
         for task in tasks:
             task_name = task.metadata.name
-            if task_name not in HOSTED_TASK_CONFIGS and task_name not in LOCAL_TASK_DIRS:
+            if task_name not in ALL_TASK_NAMES:
                 raise ValueError(
                     f"No sparse dataset mapping defined for task: {task_name}. "
-                    "Add dataset_path, corpus_name, queries_name, qrels_name, and id_column."
+                    "Add it to HOSTED_TASK_CONFIGS or LOCAL_TASK_DIRS in lm_toolkit/tasks/registry.py."
                 )
-            
+
             if overwrite_strategy != "always" and sparse_cache.has_result(
                 model_name, task_name, model_revision
             ):
@@ -455,40 +446,11 @@ def main():
 
             print(f"Evaluating sparse model on task: {task_name}")
 
-            if task_name in LOCAL_TASK_DIRS:
-                local_dir = LOCAL_TASK_DIRS[task_name]
-                hf_subset = "default"
-                id_column = "_id"
-
-                corpus_ds = Dataset.from_parquet(str(local_dir / f"{split}_corpus.parquet"))
-                queries_ds = Dataset.from_parquet(str(local_dir / f"{split}_queries.parquet"))
-                qrels_ds = Dataset.from_parquet(str(local_dir / f"{split}_qrels.parquet"))
-            else:
-                task_config = HOSTED_TASK_CONFIGS[task_name]
-                hf_subset = task_config["hf_subset"]
-                id_column = task_config["id_column"]
-                dataset_path = task.metadata.dataset["path"]
-
-                prefix = "" if hf_subset == "default" else f"{hf_subset}-"
-                corpus_name = f"{prefix}corpus"
-                queries_name = f"{prefix}queries"
-                qrels_name = f"{prefix}qrels"
-
-                corpus_ds = load_dataset(
-                    path=dataset_path,
-                    name=corpus_name,
-                    split=split,
-                )
-                queries_ds = load_dataset(
-                    path=dataset_path,
-                    name=queries_name,
-                    split=split,
-                )
-                qrels_ds = load_dataset(
-                    path=dataset_path,
-                    name=qrels_name,
-                    split=split,
-                )
+            hf_subset = resolve_hf_subset(task_name)
+            id_column = resolve_id_column(task_name)
+            corpus_ds = load_retrieval_dataset(task_name, "corpus", split)
+            queries_ds = load_retrieval_dataset(task_name, "queries", split)
+            qrels_ds = load_retrieval_dataset(task_name, "qrels", split)
 
             queries = {str(row[id_column]): row["text"] for row in queries_ds}
             corpus = {str(row[id_column]): row["text"] for row in corpus_ds}
