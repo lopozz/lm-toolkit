@@ -36,11 +36,15 @@ class MMarcoITRetrieval(AbsTaskRetrieval):
 
         corpus_ds = Dataset.from_parquet(str(local_dir / f"{split}_corpus.parquet"))
         if "_id" in corpus_ds.column_names:
-            corpus_ds = corpus_ds.cast_column("_id", Value("string")).rename_column("_id", "id")
+            corpus_ds = corpus_ds.cast_column("_id", Value("string")).rename_column(
+                "_id", "id"
+            )
 
         queries_ds = Dataset.from_parquet(str(local_dir / f"{split}_queries.parquet"))
         if "_id" in queries_ds.column_names:
-            queries_ds = queries_ds.cast_column("_id", Value("string")).rename_column("_id", "id")
+            queries_ds = queries_ds.cast_column("_id", Value("string")).rename_column(
+                "_id", "id"
+            )
 
         qrels_ds = Dataset.from_parquet(str(local_dir / f"{split}_qrels.parquet"))
         qrels_ds = qrels_ds.select_columns(["query-id", "corpus-id", "score"])
@@ -109,11 +113,15 @@ class MMarcoITRetrieval2(AbsTaskRetrieval):
 
         corpus_ds = Dataset.from_parquet(str(local_dir / f"{split}_corpus.parquet"))
         if "_id" in corpus_ds.column_names:
-            corpus_ds = corpus_ds.cast_column("_id", Value("string")).rename_column("_id", "id")
+            corpus_ds = corpus_ds.cast_column("_id", Value("string")).rename_column(
+                "_id", "id"
+            )
 
         queries_ds = Dataset.from_parquet(str(local_dir / f"{split}_queries.parquet"))
         if "_id" in queries_ds.column_names:
-            queries_ds = queries_ds.cast_column("_id", Value("string")).rename_column("_id", "id")
+            queries_ds = queries_ds.cast_column("_id", Value("string")).rename_column(
+                "_id", "id"
+            )
 
         qrels_ds = Dataset.from_parquet(str(local_dir / f"{split}_qrels.parquet"))
         qrels_ds = qrels_ds.select_columns(["query-id", "corpus-id", "score"])
