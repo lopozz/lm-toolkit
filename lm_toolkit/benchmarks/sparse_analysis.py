@@ -363,6 +363,7 @@ def summarize_overall(frame: pd.DataFrame) -> pd.DataFrame:
             "p90": p90(frame[metric]),
         }
         for metric in OVERALL_METRICS
+        if metric in frame.columns  # e.g. BM25 has no expansion/retention columns
     ]
     return pd.DataFrame(records)
 
