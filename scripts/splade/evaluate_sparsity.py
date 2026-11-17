@@ -17,8 +17,8 @@ representation behavior across models on the same dataset.
 
 Typical usage:
 
-    python3 scripts/splade/evaluate_sparsity.py \\
-      --model nickprock/splade-bert-base-italian-xxl-uncased-cv \\
+    python3 scripts/splade/evaluate_sparsity.py \
+      --model lopozz/splade-bert-base-italian-xxl-uncased \
       --task-name MuPLeR-retrieval --language it
 """
 
