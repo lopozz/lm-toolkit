@@ -59,19 +59,27 @@ def load_queries(path_str: str, modified_ns: int) -> list[dict[str, Any]]:
     expected_models: set[str] | None = None
     for query in queries:
         if "gold_ids" not in query:
-            raise ValueError("Missing 'gold_ids'. Regenerate the JSON with the latest exporter.")
+            raise ValueError(
+                "Missing 'gold_ids'. Regenerate the JSON with the latest exporter."
+            )
         models = query.get("models")
         if not isinstance(models, dict) or not models:
-            raise ValueError("Missing model representations. Regenerate the JSON with the latest exporter.")
+            raise ValueError(
+                "Missing model representations. Regenerate the JSON with the latest exporter."
+            )
         model_names = set(models)
         if expected_models is None:
             expected_models = model_names
         elif model_names != expected_models:
-            raise ValueError("Queries contain inconsistent model sets. Regenerate the JSON.")
+            raise ValueError(
+                "Queries contain inconsistent model sets. Regenerate the JSON."
+            )
 
         for model_name, model_data in models.items():
             if not isinstance(model_data, dict):
-                raise ValueError(f"Invalid representation for model '{model_name}'. Regenerate the JSON.")
+                raise ValueError(
+                    f"Invalid representation for model '{model_name}'. Regenerate the JSON."
+                )
             if "ndcg_at_10" not in model_data:
                 raise ValueError(
                     f"Missing 'ndcg_at_10' for model '{model_name}'. "
@@ -79,7 +87,9 @@ def load_queries(path_str: str, modified_ns: int) -> list[dict[str, Any]]:
                 )
             ndcg = float(model_data["ndcg_at_10"])
             if not 0.0 <= ndcg <= 1.0:
-                raise ValueError(f"Invalid nDCG@10 for model '{model_name}'. Regenerate the JSON.")
+                raise ValueError(
+                    f"Invalid nDCG@10 for model '{model_name}'. Regenerate the JSON."
+                )
             if "query_representation" not in model_data:
                 raise ValueError(
                     f"Missing query representation for model '{model_name}'. "
@@ -96,22 +106,42 @@ def load_queries(path_str: str, modified_ns: int) -> list[dict[str, Any]]:
                     f"Missing gold-document metadata for model '{model_name}'. "
                     "Regenerate the JSON with the latest exporter."
                 )
-            extra_gold = [document for document in documents if document.get("is_extra_gold", False)]
-            top_documents = [document for document in documents if not document.get("is_extra_gold", False)]
-            if documents != extra_gold + top_documents or len(top_documents) > DISPLAY_DOCUMENTS:
+            extra_gold = [
+                document
+                for document in documents
+                if document.get("is_extra_gold", False)
+            ]
+            top_documents = [
+                document
+                for document in documents
+                if not document.get("is_extra_gold", False)
+            ]
+            if (
+                documents != extra_gold + top_documents
+                or len(top_documents) > DISPLAY_DOCUMENTS
+            ):
                 raise ValueError(
                     f"Invalid document order for model '{model_name}'. "
                     "Regenerate the JSON with the latest exporter."
                 )
             expected_ranks = list(range(1, len(top_documents) + 1))
             if [document.get("rank") for document in top_documents] != expected_ranks:
-                raise ValueError(f"Invalid top-document ranks for model '{model_name}'. Regenerate the JSON.")
+                raise ValueError(
+                    f"Invalid top-document ranks for model '{model_name}'. Regenerate the JSON."
+                )
             query_gold_ids = {str(doc_id) for doc_id in query["gold_ids"]}
-            if any(str(document.get("doc_id")) not in query_gold_ids for document in extra_gold):
-                raise ValueError(f"Invalid extra gold document for model '{model_name}'. Regenerate the JSON.")
+            if any(
+                str(document.get("doc_id")) not in query_gold_ids
+                for document in extra_gold
+            ):
+                raise ValueError(
+                    f"Invalid extra gold document for model '{model_name}'. Regenerate the JSON."
+                )
             doc_ids = [str(document.get("doc_id")) for document in documents]
             if len(doc_ids) != len(set(doc_ids)):
-                raise ValueError(f"Duplicate documents for model '{model_name}'. Regenerate the JSON.")
+                raise ValueError(
+                    f"Duplicate documents for model '{model_name}'. Regenerate the JSON."
+                )
 
     return queries
 
@@ -131,7 +161,9 @@ def keep_tokens(items: list[dict[str, Any]], tokens: set[str]) -> list[dict[str,
     return [item for item in items if str(item.get("token", "")) in tokens]
 
 
-def token_temperature(weight: float, min_weight: float, max_weight: float, rank: int, total: int) -> float:
+def token_temperature(
+    weight: float, min_weight: float, max_weight: float, rank: int, total: int
+) -> float:
     if max_weight > min_weight:
         return (weight - min_weight) / (max_weight - min_weight)
     if total <= 1:
@@ -161,7 +193,9 @@ def chip_html(items: list[dict[str, Any]], *, caption: str, limit: int | None) -
     for rank, item in enumerate(visible_items):
         token = str(item["token"])
         weight = float(item["weight"])
-        heat = token_temperature(weight, min_weight, max_weight, rank, len(visible_items))
+        heat = token_temperature(
+            weight, min_weight, max_weight, rank, len(visible_items)
+        )
         hue = 22 + int((1.0 - heat) * 180)
         alpha = 0.18 + heat * 0.42
         border_alpha = 0.3 + heat * 0.5
@@ -188,7 +222,7 @@ def chip_html(items: list[dict[str, Any]], *, caption: str, limit: int | None) -
         f"""
         <div class="panel">
           <div class="panel-title">{escape_html(caption)}</div>
-          <div class="chip-cloud">{''.join(chips)}</div>
+          <div class="chip-cloud">{"".join(chips)}</div>
         </div>
         """
     ).strip()
@@ -394,7 +428,11 @@ def main() -> None:
 
     if search_query.strip():
         needle = search_query.casefold()
-        queries = [query for query in queries if needle in str(query.get("text", "")).casefold()]
+        queries = [
+            query
+            for query in queries
+            if needle in str(query.get("text", "")).casefold()
+        ]
 
     if not queries:
         st.warning("No queries match the current filters.")
@@ -403,14 +441,20 @@ def main() -> None:
     model_names = list(queries[0]["models"])
     left_model_index = model_names.index("bm25") if "bm25" in model_names else 0
     right_model_index = next(
-        (index for index, model_name in enumerate(model_names) if index != left_model_index),
+        (
+            index
+            for index, model_name in enumerate(model_names)
+            if index != left_model_index
+        ),
         left_model_index,
     )
 
     with st.sidebar:
         st.subheader("1. Select Models")
         st.caption("Choose which model appears in each comparison column.")
-        left_model = st.selectbox("Left column", options=model_names, index=left_model_index)
+        left_model = st.selectbox(
+            "Left column", options=model_names, index=left_model_index
+        )
         right_model = st.selectbox(
             "Right column",
             options=model_names,
@@ -421,8 +465,12 @@ def main() -> None:
             "Keep only queries whose nDCG@10 falls inside both score ranges. "
             "The sliders filter the query list; they do not change retrieval scores."
         )
-        left_range = st.slider(f"Left column: {left_model}", 0.0, 1.0, (0.0, 1.0), step=0.01)
-        right_range = st.slider(f"Right column: {right_model}", 0.0, 1.0, (0.0, 1.0), step=0.01)
+        left_range = st.slider(
+            f"Left column: {left_model}", 0.0, 1.0, (0.0, 1.0), step=0.01
+        )
+        right_range = st.slider(
+            f"Right column: {right_model}", 0.0, 1.0, (0.0, 1.0), step=0.01
+        )
         intersection_only = st.toggle(
             "Show shared document tokens only",
             help=(
@@ -452,7 +500,9 @@ def main() -> None:
     query_index = st.selectbox(
         "Query",
         options=range(len(queries)),
-        format_func=lambda index: f"#{index + 1}  {str(queries[index].get('text', ''))[:100]}",
+        format_func=lambda index: (
+            f"#{index + 1}  {str(queries[index].get('text', ''))[:100]}"
+        ),
     )
     query = queries[query_index]
 

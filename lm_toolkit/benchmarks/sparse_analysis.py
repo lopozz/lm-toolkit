@@ -14,7 +14,12 @@ from dataclasses import dataclass
 from collections import defaultdict
 from sentence_transformers import SparseEncoder
 
-from lm_toolkit.tasks.registry import ALL_TASK_NAMES, load_retrieval_dataset, resolve_hf_subset, resolve_id_column
+from lm_toolkit.tasks.registry import (
+    ALL_TASK_NAMES,
+    load_retrieval_dataset,
+    resolve_hf_subset,
+    resolve_id_column,
+)
 
 DOCUMENT_METRICS = (
     "active_dims",
@@ -50,6 +55,7 @@ FIXED_LENGTH_BUCKETS: tuple[tuple[str, int, int | None], ...] = (
 
 Expansion = list[dict[int, Any]]
 
+
 @dataclass(frozen=True)
 class RetrievalTask:
     task_name: str
@@ -58,23 +64,22 @@ class RetrievalTask:
 
 
 def load_corpus(task: RetrievalTask) -> dict[str, str]:
-    corpus_ds = load_retrieval_dataset(task.task_name, "corpus", task.split, task.language)
+    corpus_ds = load_retrieval_dataset(
+        task.task_name, "corpus", task.split, task.language
+    )
     id_column = resolve_id_column(task.task_name)
 
-    return {
-        str(row[id_column]): str(row["text"])
-        for row in corpus_ds
-    }
+    return {str(row[id_column]): str(row["text"]) for row in corpus_ds}
 
 
 def load_queries(task: RetrievalTask) -> dict[str, str]:
-    queries_ds = load_retrieval_dataset(task.task_name, "queries", task.split, task.language)
+    queries_ds = load_retrieval_dataset(
+        task.task_name, "queries", task.split, task.language
+    )
     id_column = resolve_id_column(task.task_name)
 
-    return {
-        str(row[id_column]): str(row["text"])
-        for row in queries_ds
-    }
+    return {str(row[id_column]): str(row["text"]) for row in queries_ds}
+
 
 def tensor_expansion(vector: Any) -> Expansion:
     if not torch.is_tensor(vector):
@@ -108,6 +113,7 @@ def tensor_expansion(vector: Any) -> Expansion:
     expansion.sort(key=lambda item: (-float(item["weight"]), str(item["token"])))
     return expansion
 
+
 def lexical_retention(
     expansion: Expansion,
     terms: set[int],
@@ -128,6 +134,7 @@ def lexical_retention(
     )
     return len(retained), retention_ratio, retained_weight / total_weight
 
+
 def expansion_ratio(expansion: Expansion, terms: set[int]) -> float:
     """Fraction of active dimensions that are not literal input terms."""
     if not expansion:
@@ -135,6 +142,7 @@ def expansion_ratio(expansion: Expansion, terms: set[int]) -> float:
 
     novel = sum(1 for item in expansion if item["token"] not in terms)
     return novel / len(expansion)
+
 
 def expansion_weight_ratio(expansion: Expansion, terms: set[int]) -> float:
     """Fraction of activation mass assigned to non-input terms."""
@@ -147,6 +155,7 @@ def expansion_weight_ratio(expansion: Expansion, terms: set[int]) -> float:
         float(item["weight"]) for item in expansion if item["token"] not in terms
     )
     return novel_weight / total_weight
+
 
 def document_metrics(
     text: str,
@@ -166,10 +175,12 @@ def document_metrics(
     raw_ids = tokenizer(text, add_special_tokens=False, truncation=False)["input_ids"]
     raw_length = len(raw_ids)
 
-    effective_ids = raw_ids[:encoder_max_length - 2]
+    effective_ids = raw_ids[: encoder_max_length - 2]
     was_truncated = int(raw_length > encoder_max_length - 2)
 
-    assert effective_ids, f"Tokenizer returned an empty token list within encoder_max_length for text: {text!r}"
+    assert effective_ids, (
+        f"Tokenizer returned an empty token list within encoder_max_length for text: {text!r}"
+    )
 
     terms = set(effective_ids)
 
@@ -179,19 +190,33 @@ def document_metrics(
     active_dims = len(expansion)
 
     return {
-        "raw_token_length": raw_length,                                                 # the document's true length
-        "effective_token_length": len(effective_ids),                                   # token after truncation (minus special tokens).
-        "vocab_size": len(terms),                                                   # distinct token types in the effective input (length counts repeats, this doesn't)
-        "was_truncated": was_truncated,                                                 # if raw_token_length exceeded the encoder's capacity
-        "active_dims": float(active_dims),                                              # number of non-zero dimensions in the sparse vector
-        "sparsity_ratio": float(sparsity_ratio),                                        # fraction of the vocabulary that stayed at zero (1 - density).
-        "expansion_ratio": expansion_ratio(expansion, terms),                           # fraction of active dims that are NOT literal input terms (the real expansion).
-        "retention_ratio": retention_ratio,                                             # input terms that stayed active
-        "expansion_weight_ratio": expansion_weight_ratio(expansion, terms),             # fraction of total activation weight carried by those expansion terms
-        "retention_weight_ratio": retention_weight_ratio,                               # same, but weighted by how much activation weight those terms carry.
-        "retention": retention,                                                         # count of active dims that are literal input terms
-        "expansion": active_dims - retention,                                           # count of active dims that are expansion terms
+        "raw_token_length": raw_length,  # the document's true length
+        "effective_token_length": len(
+            effective_ids
+        ),  # token after truncation (minus special tokens).
+        "vocab_size": len(
+            terms
+        ),  # distinct token types in the effective input (length counts repeats, this doesn't)
+        "was_truncated": was_truncated,  # if raw_token_length exceeded the encoder's capacity
+        "active_dims": float(
+            active_dims
+        ),  # number of non-zero dimensions in the sparse vector
+        "sparsity_ratio": float(
+            sparsity_ratio
+        ),  # fraction of the vocabulary that stayed at zero (1 - density).
+        "expansion_ratio": expansion_ratio(
+            expansion, terms
+        ),  # fraction of active dims that are NOT literal input terms (the real expansion).
+        "retention_ratio": retention_ratio,  # input terms that stayed active
+        "expansion_weight_ratio": expansion_weight_ratio(
+            expansion, terms
+        ),  # fraction of total activation weight carried by those expansion terms
+        "retention_weight_ratio": retention_weight_ratio,  # same, but weighted by how much activation weight those terms carry.
+        "retention": retention,  # count of active dims that are literal input terms
+        "expansion": active_dims
+        - retention,  # count of active dims that are expansion terms
     }
+
 
 def encode_document_rows(
     task: RetrievalTask,
@@ -202,9 +227,13 @@ def encode_document_rows(
     document_ids = list(corpus)
 
     tokenizer = backend.tokenizer
-    encoder_max_length = getattr(backend, "max_seq_length", None) or getattr(tokenizer, "model_max_length", None)
+    encoder_max_length = getattr(backend, "max_seq_length", None) or getattr(
+        tokenizer, "model_max_length", None
+    )
 
-    assert encoder_max_length is not None, "Could not determine encoder max length from model or tokenizer."
+    assert encoder_max_length is not None, (
+        "Could not determine encoder max length from model or tokenizer."
+    )
 
     print(
         f"\nEncoding {task.task_name}: {len(document_ids):,} documents; "
@@ -225,19 +254,26 @@ def encode_document_rows(
         batch_ids = document_ids[start : start + batch_size]
         batch_texts = [corpus[document_id] for document_id in batch_ids]
 
-        vectors = backend.encode_document(batch_texts, convert_to_sparse_tensor=False) # [B, V]
+        vectors = backend.encode_document(
+            batch_texts, convert_to_sparse_tensor=False
+        )  # [B, V]
 
-        for document_id, text, vector in zip(batch_ids, batch_texts, vectors, strict=True):
+        for document_id, text, vector in zip(
+            batch_ids, batch_texts, vectors, strict=True
+        ):
             sparsity = backend.sparsity(vector)["sparsity_ratio"]
 
             row = {
                 "dataset": task.task_name,
                 "document_id": document_id,
-                **document_metrics(text, tokenizer, encoder_max_length, vector, sparsity),
+                **document_metrics(
+                    text, tokenizer, encoder_max_length, vector, sparsity
+                ),
             }
             rows.append(row)
 
     return rows
+
 
 def add_dataset_quantile_buckets(
     frame: pd.DataFrame,
@@ -400,7 +436,9 @@ def transpose_by_stat(frame: pd.DataFrame, index_column: str) -> pd.DataFrame:
     per bucket, blanking repeated metric names so each prints once above its
     stat rows."""
     transposed = frame.round(3).set_index(index_column).T
-    metric_names, stat_names = zip(*(split_metric_stat(name) for name in transposed.index))
+    metric_names, stat_names = zip(
+        *(split_metric_stat(name) for name in transposed.index)
+    )
     deduped_metric_names = [
         name if index == 0 or name != metric_names[index - 1] else ""
         for index, name in enumerate(metric_names)
@@ -433,7 +471,9 @@ def task_hf_subset(task: RetrievalTask) -> str:
 
 
 def load_qrels(task: RetrievalTask) -> dict[str, set[str]]:
-    qrels_ds = load_retrieval_dataset(task.task_name, "qrels", task.split, task.language)
+    qrels_ds = load_retrieval_dataset(
+        task.task_name, "qrels", task.split, task.language
+    )
 
     relevant_docs: dict[str, set[str]] = defaultdict(set)
     for row in qrels_ds:
@@ -451,7 +491,9 @@ def load_predictions(
     hf_subset = task_hf_subset(task)
 
     return {
-        str(query_id): {str(doc_id): float(score) for doc_id, score in documents.items()}
+        str(query_id): {
+            str(doc_id): float(score) for doc_id, score in documents.items()
+        }
         for query_id, documents in payload[hf_subset][task.split].items()
     }
 
@@ -461,10 +503,15 @@ def ndcg_at_k(results: dict[str, float], gold_ids: set[str], k: int) -> float:
         return 0.0
 
     ranked_ids = [
-        doc_id for doc_id, _ in sorted(results.items(), key=lambda item: item[1], reverse=True)[:k]
+        doc_id
+        for doc_id, _ in sorted(
+            results.items(), key=lambda item: item[1], reverse=True
+        )[:k]
     ]
     dcg = sum(
-        1.0 / math.log2(rank + 2) for rank, doc_id in enumerate(ranked_ids) if doc_id in gold_ids
+        1.0 / math.log2(rank + 2)
+        for rank, doc_id in enumerate(ranked_ids)
+        if doc_id in gold_ids
     )
     ideal_hits = min(len(gold_ids), k)
     idcg = sum(1.0 / math.log2(rank + 2) for rank in range(ideal_hits))
@@ -500,7 +547,9 @@ def retrieval_by_length_bucket(
         if not present_ids:
             continue
 
-        bucket = bucket_by_doc.loc[present_ids].min()  # respects the ordered Categorical
+        bucket = bucket_by_doc.loc[
+            present_ids
+        ].min()  # respects the ordered Categorical
         score = ndcg_at_k(predictions.get(query_id, {}), gold_ids, k)
 
         records.append(
@@ -563,7 +612,10 @@ def build_fp_audit(
             continue  # only auditing imperfect queries
 
         ranked_ids = [
-            doc_id for doc_id, _ in sorted(results.items(), key=lambda item: item[1], reverse=True)
+            doc_id
+            for doc_id, _ in sorted(
+                results.items(), key=lambda item: item[1], reverse=True
+            )
         ]
 
         gold_present = [doc_id for doc_id in gold_ids if doc_id in results]
@@ -613,21 +665,29 @@ def add_audit_flags(audit: pd.DataFrame) -> pd.DataFrame:
     audit["top_result_is_fp"] = audit["true_doc_rank"] > 1
 
     audit["fp_shorter"] = audit["top_fp_length"] < audit["true_doc_length"]
-    audit["fp_more_active"] = audit["top_fp_active_dims"] > audit["true_doc_active_dims"]
+    audit["fp_more_active"] = (
+        audit["top_fp_active_dims"] > audit["true_doc_active_dims"]
+    )
     audit["fp_shorter_and_more_active"] = audit["fp_shorter"] & audit["fp_more_active"]
 
     audit["length_difference"] = audit["top_fp_length"] - audit["true_doc_length"]
-    audit["active_dims_difference"] = audit["top_fp_active_dims"] - audit["true_doc_active_dims"]
-
-    audit["active_dims_ratio"] = (
-        audit["top_fp_active_dims"] / audit["true_doc_active_dims"].replace(0, np.nan)
+    audit["active_dims_difference"] = (
+        audit["top_fp_active_dims"] - audit["true_doc_active_dims"]
     )
-    audit["length_ratio"] = audit["top_fp_length"] / audit["true_doc_length"].replace(0, np.nan)
+
+    audit["active_dims_ratio"] = audit["top_fp_active_dims"] / audit[
+        "true_doc_active_dims"
+    ].replace(0, np.nan)
+    audit["length_ratio"] = audit["top_fp_length"] / audit["true_doc_length"].replace(
+        0, np.nan
+    )
 
     return audit
 
 
-def summarize_displacement(audit: pd.DataFrame, displacement: pd.DataFrame) -> pd.Series:
+def summarize_displacement(
+    audit: pd.DataFrame, displacement: pd.DataFrame
+) -> pd.Series:
     """
     displacement is the subset of an add_audit_flags-flagged audit table
     where fp_outranks_true is True -- queries where a genuinely wrong
@@ -644,15 +704,21 @@ def summarize_displacement(audit: pd.DataFrame, displacement: pd.DataFrame) -> p
             "median_fp_active_dims": displacement["top_fp_active_dims"].median(),
             "share_fp_shorter": displacement["fp_shorter"].mean(),
             "share_fp_more_active": displacement["fp_more_active"].mean(),
-            "share_fp_shorter_and_more_active": displacement["fp_shorter_and_more_active"].mean(),
+            "share_fp_shorter_and_more_active": displacement[
+                "fp_shorter_and_more_active"
+            ].mean(),
             "median_score_gap": displacement["score_gap"].median(),
             "median_length_difference": displacement["length_difference"].median(),
-            "median_active_dims_difference": displacement["active_dims_difference"].median(),
+            "median_active_dims_difference": displacement[
+                "active_dims_difference"
+            ].median(),
         }
     )
 
 
-def summarize_displacement_by_bucket(displacement: pd.DataFrame, k: int = 10) -> pd.DataFrame:
+def summarize_displacement_by_bucket(
+    displacement: pd.DataFrame, k: int = 10
+) -> pd.DataFrame:
     """Same H1 breakdown as summarize_displacement, grouped by the true doc's
     own length bucket -- so you can see whether displacement concentrates in
     a specific length range rather than being spread evenly."""
@@ -676,7 +742,9 @@ def summarize_displacement_by_bucket(displacement: pd.DataFrame, k: int = 10) ->
     )
 
 
-def compute_bucket_enrichment(document_frame: pd.DataFrame, displacement: pd.DataFrame) -> pd.DataFrame:
+def compute_bucket_enrichment(
+    document_frame: pd.DataFrame, displacement: pd.DataFrame
+) -> pd.DataFrame:
     """
     Compares each length bucket's share of the whole corpus against its share
     of top false positives. An enrichment_ratio above 1 means that bucket is
@@ -692,13 +760,15 @@ def compute_bucket_enrichment(document_frame: pd.DataFrame, displacement: pd.Dat
         axis=1,
     )
     enrichment["false_positive_share"] = enrichment["false_positive_share"].fillna(0.0)
-    enrichment["enrichment_ratio"] = (
-        enrichment["false_positive_share"] / enrichment["corpus_share"].replace(0, np.nan)
-    )
+    enrichment["enrichment_ratio"] = enrichment["false_positive_share"] / enrichment[
+        "corpus_share"
+    ].replace(0, np.nan)
     return enrichment.reset_index(names="bucket")
 
 
-def compute_fp_active_dims_baseline(document_frame: pd.DataFrame, displacement: pd.DataFrame) -> pd.DataFrame:
+def compute_fp_active_dims_baseline(
+    document_frame: pd.DataFrame, displacement: pd.DataFrame
+) -> pd.DataFrame:
     """
     Adds fp_active_excess and fp_active_zscore to displacement: how far the
     false positive's active_dims sits above its OWN bucket's median/mean --
@@ -747,7 +817,14 @@ def run_fp_audit(
     bucket_by_doc = document_frame.set_index("document_id")["bucket"]
 
     audit = add_audit_flags(
-        build_fp_audit(relevant_docs, predictions, active_dims_by_doc, length_by_doc, bucket_by_doc, k=k)
+        build_fp_audit(
+            relevant_docs,
+            predictions,
+            active_dims_by_doc,
+            length_by_doc,
+            bucket_by_doc,
+            k=k,
+        )
     )
     displacement = audit[audit["fp_outranks_true"]].copy()
 
@@ -757,7 +834,9 @@ def run_fp_audit(
         "displacement_summary": summarize_displacement(audit, displacement),
         "displacement_by_bucket": summarize_displacement_by_bucket(displacement, k=k),
         "bucket_enrichment": compute_bucket_enrichment(document_frame, displacement),
-        "fp_active_baseline": compute_fp_active_dims_baseline(document_frame, displacement),
+        "fp_active_baseline": compute_fp_active_dims_baseline(
+            document_frame, displacement
+        ),
     }
 
 
@@ -783,7 +862,12 @@ def print_fp_audit_results(results: dict[str, Any]) -> None:
         "that bucket; share_fp_* = fraction of those where the false positive "
         "was shorter / denser / both)"
     )
-    print(results["displacement_by_bucket"].round(2).set_index("true_doc_bucket").T.to_string())
+    print(
+        results["displacement_by_bucket"]
+        .round(2)
+        .set_index("true_doc_bucket")
+        .T.to_string()
+    )
 
     print(
         "\nBucket enrichment: are short/dense buckets overrepresented among false "
@@ -811,7 +895,10 @@ def print_fp_audit_results(results: dict[str, Any]) -> None:
         .agg(
             fp_active_excess_median=("fp_active_excess", "median"),
             fp_active_zscore_mean=("fp_active_zscore", "mean"),
-            share_fp_above_bucket_median=("fp_active_excess", lambda values: (values > 0).mean()),
+            share_fp_above_bucket_median=(
+                "fp_active_excess",
+                lambda values: (values > 0).mean(),
+            ),
         )
         .round(2)
         .to_string()
@@ -851,7 +938,9 @@ def evaluate_sparse_retrieval(
         )
         results.extend(rows)
 
-        output_dir = Path("outputs") / "sparse_analysis"/ safe_model_name / task.task_name
+        output_dir = (
+            Path("outputs") / "sparse_analysis" / safe_model_name / task.task_name
+        )
         output_dir.mkdir(parents=True, exist_ok=True)
 
         document_frame = pd.DataFrame(rows)
@@ -880,7 +969,12 @@ def evaluate_sparse_retrieval(
             index=False,
         )
 
-        results_path = Path("results") / safe_model_name / "prediction_folder" / f"{task.task_name}_predictions.json"
+        results_path = (
+            Path("results")
+            / safe_model_name
+            / "prediction_folder"
+            / f"{task.task_name}_predictions.json"
+        )
 
         if results_path.exists():
             retrieval_summary = retrieval_by_length_bucket(
@@ -889,7 +983,9 @@ def evaluate_sparse_retrieval(
                 results_path=results_path,
             )
 
-            assert not retrieval_summary.empty, f"Expected non-empty retrieval summary for {task.task_name} at {results_path}"
+            assert not retrieval_summary.empty, (
+                f"Expected non-empty retrieval summary for {task.task_name} at {results_path}"
+            )
 
             retrieval_summary.to_csv(
                 output_dir / "retrieval_by_length_bucket.csv",
@@ -900,7 +996,9 @@ def evaluate_sparse_retrieval(
             # since document_frame (the expensive part) is already in memory.
             predictions = load_predictions(task, results_path)
             relevant_docs = load_qrels(task)
-            fp_audit_results = run_fp_audit(document_frame, relevant_docs, predictions, k=10)
+            fp_audit_results = run_fp_audit(
+                document_frame, relevant_docs, predictions, k=10
+            )
         else:
             retrieval_summary = None
             print(
@@ -910,7 +1008,7 @@ def evaluate_sparse_retrieval(
             )
 
         print_key_results(overall_summary, retrieval_summary, bucket_summary)
-        if results_path.exists(): 
+        if results_path.exists():
             print_fp_audit_results(fp_audit_results)
 
         metadata = {

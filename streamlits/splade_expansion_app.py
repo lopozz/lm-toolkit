@@ -13,7 +13,9 @@ import streamlit as st
 
 APP_DIR = Path(__file__).resolve().parent
 DEFAULT_DATA_PATH = APP_DIR / "splade_expansions.json"
-DEFAULT_TOKENIZER_MODEL = "opensearch-project/opensearch-neural-sparse-encoding-multilingual-v1"
+DEFAULT_TOKENIZER_MODEL = (
+    "opensearch-project/opensearch-neural-sparse-encoding-multilingual-v1"
+)
 TOKEN_RE = re.compile(r"\w+", re.UNICODE)
 STOP_WORDS = {
     "a",
@@ -77,7 +79,10 @@ def load_model_rows(path_str: str) -> dict[str, list[dict[str, Any]]]:
             normalized_row = dict(row)
             normalized_row["expansion"] = sorted(
                 normalized_row.get("expansion", []),
-                key=lambda item: (-float(item.get("weight", 0.0)), str(item.get("token", ""))),
+                key=lambda item: (
+                    -float(item.get("weight", 0.0)),
+                    str(item.get("token", "")),
+                ),
             )
             normalized_rows.append(normalized_row)
         model_rows[str(model_name)] = normalized_rows
@@ -112,7 +117,9 @@ def original_terms(text: str) -> set[str]:
     return {match.group(0).lower() for match in TOKEN_RE.finditer(text)}
 
 
-def classify_terms(text: str, expansion: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def classify_terms(
+    text: str, expansion: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     source_terms = original_terms(text)
     in_text: list[dict[str, Any]] = []
     added: list[dict[str, Any]] = []
@@ -129,7 +136,9 @@ def classify_terms(text: str, expansion: list[dict[str, Any]]) -> tuple[list[dic
     return in_text, added
 
 
-def token_temperature(weight: float, min_weight: float, max_weight: float, rank: int, total: int) -> float:
+def token_temperature(
+    weight: float, min_weight: float, max_weight: float, rank: int, total: int
+) -> float:
     if max_weight > min_weight:
         return (weight - min_weight) / (max_weight - min_weight)
     if total <= 1:
@@ -137,7 +146,9 @@ def token_temperature(weight: float, min_weight: float, max_weight: float, rank:
     return 1.0 - (rank / max(total - 1, 1)) * 0.65
 
 
-def chip_html(items: list[dict[str, Any]], *, caption: str, limit: int | None = None) -> str:
+def chip_html(
+    items: list[dict[str, Any]], *, caption: str, limit: int | None = None
+) -> str:
     visible_items = items if limit is None else items[:limit]
     if not visible_items:
         return textwrap.dedent(
@@ -157,7 +168,9 @@ def chip_html(items: list[dict[str, Any]], *, caption: str, limit: int | None = 
     for rank, item in enumerate(visible_items):
         token = str(item["token"])
         weight = float(item["weight"])
-        heat = token_temperature(weight, min_weight, max_weight, rank, len(visible_items))
+        heat = token_temperature(
+            weight, min_weight, max_weight, rank, len(visible_items)
+        )
         hue = 22 + int((1.0 - heat) * 180)
         alpha = 0.18 + heat * 0.42
         border_alpha = 0.3 + heat * 0.5
@@ -186,7 +199,7 @@ def chip_html(items: list[dict[str, Any]], *, caption: str, limit: int | None = 
         f"""
         <div class="panel">
           <div class="panel-title">{escape_html(caption)}</div>
-          <div class="chip-cloud">{''.join(chips)}</div>
+          <div class="chip-cloud">{"".join(chips)}</div>
         </div>
         """
     ).strip()
@@ -202,7 +215,9 @@ def sentence_html(text: str, tokenizer_name_or_path: str) -> str:
             return_offsets_mapping=True,
         )
     except Exception:
-        return f'<span class="sentence-token missing-tokenizer">{escape_html(text)}</span>'
+        return (
+            f'<span class="sentence-token missing-tokenizer">{escape_html(text)}</span>'
+        )
 
     palette = [
         "hsla(18, 88%, 72%, 0.55)",
@@ -250,7 +265,9 @@ def sentence_html(text: str, tokenizer_name_or_path: str) -> str:
         parts.append(preserve_whitespace(text[cursor:]))
 
     if not parts:
-        return f'<span class="sentence-token missing-tokenizer">{escape_html(text)}</span>'
+        return (
+            f'<span class="sentence-token missing-tokenizer">{escape_html(text)}</span>'
+        )
 
     return "".join(part.strip() for part in parts)
 
@@ -491,7 +508,9 @@ def main() -> None:
         st.header("Controls")
         data_path = st.text_input("JSON path", value=str(DEFAULT_DATA_PATH))
         top_n = st.slider("Visible terms", min_value=5, max_value=40, value=18)
-        search_query = st.text_input("Search sentence", placeholder="Filter by sentence content")
+        search_query = st.text_input(
+            "Search sentence", placeholder="Filter by sentence content"
+        )
 
     data_file = Path(data_path)
     if not data_file.exists():
@@ -516,11 +535,17 @@ def main() -> None:
     filtered_rows = rows
     if search_query.strip():
         needle = search_query.casefold()
-        filtered_rows = [row for row in rows if needle in str(row.get("text", "")).casefold()]
+        filtered_rows = [
+            row for row in rows if needle in str(row.get("text", "")).casefold()
+        ]
 
-    modes = sorted({str(row.get("mode", "unknown")) for row in filtered_rows}) or ["unknown"]
+    modes = sorted({str(row.get("mode", "unknown")) for row in filtered_rows}) or [
+        "unknown"
+    ]
     selected_mode = st.sidebar.selectbox("Mode", options=modes, index=0)
-    filtered_rows = [row for row in filtered_rows if str(row.get("mode", "unknown")) == selected_mode]
+    filtered_rows = [
+        row for row in filtered_rows if str(row.get("mode", "unknown")) == selected_mode
+    ]
 
     if not filtered_rows:
         st.warning("No rows match the current filters.")
@@ -529,7 +554,11 @@ def main() -> None:
     summaries = dominant_patterns(filtered_rows)
     metric_cols = st.columns(4)
     metric_cols[0].markdown(
-        metric_card("Sentences", str(summaries["rows"]), f"{summaries['avg_terms']:.1f} terms on average"),
+        metric_card(
+            "Sentences",
+            str(summaries["rows"]),
+            f"{summaries['avg_terms']:.1f} terms on average",
+        ),
         unsafe_allow_html=True,
     )
     metric_cols[1].markdown(
@@ -541,7 +570,11 @@ def main() -> None:
         unsafe_allow_html=True,
     )
     metric_cols[2].markdown(
-        metric_card("UNK Activations", str(summaries["unk_hits"]), "Potential tokenizer coverage issues"),
+        metric_card(
+            "UNK Activations",
+            str(summaries["unk_hits"]),
+            "Potential tokenizer coverage issues",
+        ),
         unsafe_allow_html=True,
     )
     metric_cols[3].markdown(
@@ -561,7 +594,7 @@ def main() -> None:
         except Exception as exc:
             st.error(f"Could not load tokenizer '{tokenizer_model}': {exc}")
             return
-    
+
     sentence_view = (
         sentence_html(str(selected_row["text"]), tokenizer_model)
         if tokenizer_model is not None
@@ -571,7 +604,7 @@ def main() -> None:
     st.markdown(
         f"""
         <div class="sentence-card">
-          <div class="sentence-label">Sentence #{selected_row['id']} · mode: {escape_html(str(selected_row['mode']))}</div>
+          <div class="sentence-label">Sentence #{selected_row["id"]} · mode: {escape_html(str(selected_row["mode"]))}</div>
           <div class="sentence-text">{sentence_view}</div>
         </div>
         """,
@@ -584,14 +617,27 @@ def main() -> None:
     left_col, right_col = st.columns([1.55, 1.0], gap="large")
     with left_col:
         st.markdown(
-            chip_html(current_expansion, caption="Tokens ranked by activation", limit=top_n),
+            chip_html(
+                current_expansion, caption="Tokens ranked by activation", limit=top_n
+            ),
             unsafe_allow_html=True,
         )
-        st.dataframe(table_rows(current_expansion[:top_n]), width="stretch", hide_index=True)
+        st.dataframe(
+            table_rows(current_expansion[:top_n]), width="stretch", hide_index=True
+        )
 
     with right_col:
-        st.markdown(chip_html(in_text, caption="Terms already present in the sentence", limit=top_n), unsafe_allow_html=True)
-        st.markdown(chip_html(added, caption="Expansion-only terms / fragments", limit=top_n), unsafe_allow_html=True)
+        st.markdown(
+            chip_html(
+                in_text, caption="Terms already present in the sentence", limit=top_n
+            ),
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            chip_html(added, caption="Expansion-only terms / fragments", limit=top_n),
+            unsafe_allow_html=True,
+        )
+
 
 if __name__ == "__main__":
     main()

@@ -28,7 +28,10 @@ import torch
 
 from sentence_transformers import SparseEncoder
 from sentence_transformers.sentence_transformer.modules import Router, Transformer
-from sentence_transformers.sparse_encoder.modules import SparseStaticEmbedding, SpladePooling
+from sentence_transformers.sparse_encoder.modules import (
+    SparseStaticEmbedding,
+    SpladePooling,
+)
 
 
 def load_backend(model_name: str, device: str, query_expansion: bool) -> SparseEncoder:
@@ -69,7 +72,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model",
         required=True,
-        help="SentenceTransformers SparseEncoder model name or local path.",
+        help="SentenceTransformers SparseEncoder model name or local path, or "
+        "mteb/baseline-bm25s to report the BM25 baseline.",
     )
     parser.add_argument("--task-name", default="MuPLeR-retrieval")
     parser.add_argument("--language", default="it")
@@ -89,6 +93,20 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+
+    if args.model == "mteb/baseline-bm25s":
+        from lm_toolkit.benchmarks.bm25_sparsity import evaluate_bm25_sparsity
+
+        evaluate_bm25_sparsity(
+            tasks=[
+                {
+                    "task_name": args.task_name,
+                    "language": args.language,
+                    "split": args.split,
+                }
+            ]
+        )
+        return
 
     backend = load_backend(args.model, args.device, args.query_expansion)
 

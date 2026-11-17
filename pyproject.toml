@@ -20,6 +20,9 @@ dependencies = [
 [tool.setuptools.packages.find]
 include = ["lm_toolkit*"]
 
+[tool.ruff]
+extend-exclude = ["notebooks", "llama.cpp"]
+
 [dependency-groups]
 audio = [
     "prompt-toolkit>=3.0.52",
