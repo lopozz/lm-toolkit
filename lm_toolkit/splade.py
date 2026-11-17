@@ -45,7 +45,9 @@ _SENTINEL_MAX_LENGTH = 100_000  # unset tokenizers report an unusably large sent
 
 def _default_window_tokens(model: SparseEncoder, margin: int = 2) -> int:
     """Leaves room for the [CLS]/[SEP] tokens the real encode call re-adds per chunk."""
-    max_length = getattr(model, "max_seq_length", None) or model.tokenizer.model_max_length
+    max_length = (
+        getattr(model, "max_seq_length", None) or model.tokenizer.model_max_length
+    )
     if not max_length or max_length > _SENTINEL_MAX_LENGTH:
         max_length = 512
     return max_length - margin
@@ -57,7 +59,9 @@ def _split_into_windows(text: str, tokenizer: Any, window_tokens: int) -> list[s
         return [text]
 
     return [
-        tokenizer.decode(token_ids[start : start + window_tokens], skip_special_tokens=True)
+        tokenizer.decode(
+            token_ids[start : start + window_tokens], skip_special_tokens=True
+        )
         for start in range(0, len(token_ids), window_tokens)
     ]
 
@@ -102,9 +106,13 @@ def apply_super_encode_document(
 
             for owner in range(len(sub_texts)):
                 owner_indices = [
-                    index for index, chunk_index in enumerate(chunk_owner) if chunk_index == owner
+                    index
+                    for index, chunk_index in enumerate(chunk_owner)
+                    if chunk_index == owner
                 ]
-                merged_vectors[start + owner] = chunk_vectors[owner_indices].max(dim=0).values
+                merged_vectors[start + owner] = (
+                    chunk_vectors[owner_indices].max(dim=0).values
+                )
 
         stacked = torch.stack(merged_vectors)
 
@@ -120,22 +128,121 @@ def apply_super_encode_document(
     return model
 
 
-
 ITALIAN_STOPWORDS = {
-    "a", "ad", "al", "allo", "ai", "agli", "all", "agl", "alla", "alle",
-    "con", "col", "coi",
-    "da", "dal", "dallo", "dai", "dagli", "dall", "dagl", "dalla", "dalle",
-    "di", "del", "dello", "dei", "degli", "dell", "degl", "della", "delle",
-    "in", "nel", "nello", "nei", "negli", "nell", "negl", "nella", "nelle",
-    "su", "sul", "sullo", "sui", "sugli", "sull", "sugl", "sulla", "sulle",
-    "per", "tra", "fra",
-    "il", "lo", "la", "i", "gli", "le", "un", "uno", "una",
-    "e", "ed", "o", "od", "ma", "se", "che", "chi", "cui",
-    "questo", "questa", "questi", "queste", "quello", "quella", "quelli", "quelle",
-    "sono", "sei", "è", "era", "erano", "essere", "stato", "stata", "stati", "state",
-    "ho", "hai", "ha", "abbiamo", "avete", "hanno", "avere",
-    "mi", "ti", "si", "ci", "vi", "me", "te", "lui", "lei", "noi", "voi", "loro",
-    "non", "più", "anche", "come", "dove", "quando", "perché",
+    "a",
+    "ad",
+    "al",
+    "allo",
+    "ai",
+    "agli",
+    "all",
+    "agl",
+    "alla",
+    "alle",
+    "con",
+    "col",
+    "coi",
+    "da",
+    "dal",
+    "dallo",
+    "dai",
+    "dagli",
+    "dall",
+    "dagl",
+    "dalla",
+    "dalle",
+    "di",
+    "del",
+    "dello",
+    "dei",
+    "degli",
+    "dell",
+    "degl",
+    "della",
+    "delle",
+    "in",
+    "nel",
+    "nello",
+    "nei",
+    "negli",
+    "nell",
+    "negl",
+    "nella",
+    "nelle",
+    "su",
+    "sul",
+    "sullo",
+    "sui",
+    "sugli",
+    "sull",
+    "sugl",
+    "sulla",
+    "sulle",
+    "per",
+    "tra",
+    "fra",
+    "il",
+    "lo",
+    "la",
+    "i",
+    "gli",
+    "le",
+    "un",
+    "uno",
+    "una",
+    "e",
+    "ed",
+    "o",
+    "od",
+    "ma",
+    "se",
+    "che",
+    "chi",
+    "cui",
+    "questo",
+    "questa",
+    "questi",
+    "queste",
+    "quello",
+    "quella",
+    "quelli",
+    "quelle",
+    "sono",
+    "sei",
+    "è",
+    "era",
+    "erano",
+    "essere",
+    "stato",
+    "stata",
+    "stati",
+    "state",
+    "ho",
+    "hai",
+    "ha",
+    "abbiamo",
+    "avete",
+    "hanno",
+    "avere",
+    "mi",
+    "ti",
+    "si",
+    "ci",
+    "vi",
+    "me",
+    "te",
+    "lui",
+    "lei",
+    "noi",
+    "voi",
+    "loro",
+    "non",
+    "più",
+    "anche",
+    "come",
+    "dove",
+    "quando",
+    "perché",
 }
 
 
@@ -202,17 +309,21 @@ class LexicalAwareSpladeLoss(nn.Module):
         # Punctuation-like vocab entries
         vocab = self.tokenizer.get_vocab()
         punct_chars = set(string.punctuation) | {
-            "«", "»", "“", "”", "‘", "’", "…", "–", "—", "·", "•"
+            "«",
+            "»",
+            "“",
+            "”",
+            "‘",
+            "’",
+            "…",
+            "–",
+            "—",
+            "·",
+            "•",
         }
 
         for token, tok_id in vocab.items():
-            clean = (
-                token
-                .replace("##", "")
-                .replace("▁", "")
-                .replace("Ġ", "")
-                .strip()
-            )
+            clean = token.replace("##", "").replace("▁", "").replace("Ġ", "").strip()
 
             if clean and all(ch in punct_chars for ch in clean):
                 blocked.add(int(tok_id))
@@ -298,13 +409,17 @@ class LexicalAwareSpladeLoss(nn.Module):
         )
 
         doc_retention = 0.0
-        for doc_embedding, doc_features in zip(document_embeddings, sentence_features[1:]):
+        for doc_embedding, doc_features in zip(
+            document_embeddings, sentence_features[1:]
+        ):
             doc_retention = doc_retention + self._lexical_retention_loss(
                 doc_embedding, doc_features
             )
 
         doc_retention = doc_retention / max(len(document_embeddings), 1)
-        losses["document_retention_loss"] = doc_retention * self.document_retention_weight
+        losses["document_retention_loss"] = (
+            doc_retention * self.document_retention_weight
+        )
 
         blocked_loss = self._blocked_token_loss(query_embedding)
         for doc_embedding in document_embeddings:
@@ -314,7 +429,7 @@ class LexicalAwareSpladeLoss(nn.Module):
         losses["blocked_token_loss"] = blocked_loss * self.blocked_token_weight
 
         return losses
-    
+
 
 # loss = LexicalAwareSpladeLoss(
 #     model=model,
@@ -382,7 +497,9 @@ class DatasetSpec:
     max_tokens: int | None = None
 
 
-def _load_split(data_dir: Path, dataset_name: str, split: str) -> tuple[Dataset, Dataset, Dataset]:
+def _load_split(
+    data_dir: Path, dataset_name: str, split: str
+) -> tuple[Dataset, Dataset, Dataset]:
     dataset_dir = data_dir / dataset_name
     corpus = Dataset.from_parquet(str(dataset_dir / f"{split}_corpus.parquet"))
     queries = Dataset.from_parquet(str(dataset_dir / f"{split}_queries.parquet"))
@@ -428,7 +545,8 @@ def _filter_by_token_length(
     max_tokens: int | None,
 ) -> tuple[Dataset, Dataset, Dataset]:
     doc_token_lengths = [
-        len(ids) for ids in tokenizer(list(corpus["text"]), add_special_tokens=True)["input_ids"]
+        len(ids)
+        for ids in tokenizer(list(corpus["text"]), add_special_tokens=True)["input_ids"]
     ]
 
     def out_of_range(length: int) -> bool:
@@ -463,7 +581,9 @@ def combine_datasets(
     tokenizer_name: str = DEFAULT_TOKENIZER,
 ) -> dict[str, Dataset]:
     tokenizer = None
-    if any(spec.min_tokens is not None or spec.max_tokens is not None for spec in specs):
+    if any(
+        spec.min_tokens is not None or spec.max_tokens is not None for spec in specs
+    ):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
 
     corpora: list[Dataset] = []

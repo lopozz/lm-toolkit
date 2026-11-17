@@ -85,8 +85,13 @@ from sentence_transformers import SparseEncoder
 from mteb.models.model_meta import ScoringFunction
 from importlib.metadata import PackageNotFoundError, version
 from sentence_transformers.sentence_transformer.modules import Router, Transformer
-from sentence_transformers.sparse_encoder.modules import SparseStaticEmbedding, SpladePooling
-from sentence_transformers.sparse_encoder.evaluation import SparseInformationRetrievalEvaluator
+from sentence_transformers.sparse_encoder.modules import (
+    SparseStaticEmbedding,
+    SpladePooling,
+)
+from sentence_transformers.sparse_encoder.evaluation import (
+    SparseInformationRetrievalEvaluator,
+)
 
 from lm_toolkit.cache import ResultCache as SparseResultCache
 from lm_toolkit.tasks.registry import (
@@ -95,7 +100,10 @@ from lm_toolkit.tasks.registry import (
     resolve_hf_subset,
     resolve_id_column,
 )
-from lm_toolkit.tasks.retrieval.ita import CulturaVivaRetrieval, MMarcoITRetrieval, MMarcoITRetrieval2
+from lm_toolkit.tasks.retrieval.ita import (
+    CulturaVivaRetrieval,
+    MMarcoITRetrieval,
+)
 from lm_toolkit.tasks.retrieval.multilingual import (
     GermanDPRRetrieval,
     JaQuADRetrieval,
@@ -380,11 +388,7 @@ def main():
     tasks.append(SberQuADRetrieval())
     tasks.append(GermanDPRRetrieval())
 
-    tasks = [
-        t for t in tasks if t.metadata.name not in [
-            "WebFAQRetrieval"
-        ]
-    ]
+    tasks = [t for t in tasks if t.metadata.name not in ["WebFAQRetrieval"]]
 
     if not is_sparse_model(model_name):
         model = mteb.get_model(model_name)
@@ -442,7 +446,6 @@ def main():
             ):
                 print(f"Skipping {task_name}: cached result exists")
                 continue
-
 
             print(f"Evaluating sparse model on task: {task_name}")
 
