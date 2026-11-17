@@ -8,16 +8,9 @@ task_types:
   - Retrieval
 
 excluded_tasks:
-  - XPQARetrieval
-  - BelebeleRetrieval
-  - JinaVDRGitHubReadmeRetrieval
-  - JinaVDRWikimediaCommonsDocumentsRetrieval
   - VDRMultilingualRetrieval
-  - JinaVDREuropeanaItScansRetrieval
-  # causing_errors
-  - JinaVDREuropeanaItScansRetrieval
-  - MintakaRetrieval
-  - MKQARetrieval # just contain train split
-  # too long
+  # too long docs
   - MultiLongDocRetrieval
-    
+
+split_overrides:
+  MKQARetrieval: [train]

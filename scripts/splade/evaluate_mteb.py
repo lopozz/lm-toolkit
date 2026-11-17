@@ -151,6 +151,16 @@ def build_tasks(config_path: Path) -> list:
     )
     tasks = [t for t in tasks if t.metadata.name not in excluded]
 
+    # Tasks without a `test` split (see `split_overrides` in the config) use the
+    # split they actually have; get_tasks(eval_splits=...) above forces "test".
+    overrides = config.get("split_overrides") or {}
+    tasks = [
+        t.filter_eval_splits(overrides[t.metadata.name])
+        if t.metadata.name in overrides
+        else t
+        for t in tasks
+    ]
+
     # Not in MTEB's task registry, so mteb.get_tasks() never returns them, and
     # they are not language-filtered by it either: apply the same filter here,
     # otherwise bilingual tasks (e.g. JaQuAD: it + ja) also run their non-Italian

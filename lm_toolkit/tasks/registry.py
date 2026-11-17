@@ -41,6 +41,11 @@ HOSTED_TASK_CONFIGS = {
         "hf_subset": None,
         "id_column": "id",
     },
+    "MultiLongDocRetrieval": {
+        "dataset_path": "mteb/MultiLongDocRetrieval",
+        "hf_subset": None,
+        "id_column": "id",
+    },
     "NorQuADRetrieval": {
         "dataset_path": "lopozz/NorQuADRetrieval",
         "hf_subset": None,
@@ -62,6 +67,34 @@ HOSTED_TASK_CONFIGS = {
         "id_column": "_id",
     },
 }
+
+# MTEB's MultilingualNano* retrieval tasks share one layout (mteb/<task> on the
+# Hub, it-corpus/it-queries/it-qrels configs, "id" column), so register them in bulk.
+MULTILINGUAL_NANO_TASKS = (
+    "ArguAna",
+    "ClimateFever",
+    "DBPedia",
+    "FEVER",
+    "FiQA2018",
+    "HotpotQA",
+    "MSMARCO",
+    "NFCorpus",
+    "NQ",
+    "Quora",
+    "SCIDOCS",
+    "SciFact",
+    "Touche2020",
+)
+HOSTED_TASK_CONFIGS.update(
+    {
+        f"MultilingualNano{name}Retrieval": {
+            "dataset_path": f"mteb/MultilingualNano{name}Retrieval",
+            "hf_subset": None,
+            "id_column": "id",
+        }
+        for name in MULTILINGUAL_NANO_TASKS
+    }
+)
 
 LOCAL_TASK_DIRS = {
     "MMarco-IT-Retrieval": Path("data/mmarco_it_dev_small_50k_len50_400"),
