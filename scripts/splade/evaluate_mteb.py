@@ -1,109 +1,58 @@
-"""
-Evaluate retrieval models with a temporary sparse-model workaround.
+r"""
+Evaluate dense, BM25 and sparse (SPLADE-style) retrieval models with native MTEB.
 
-This script keeps a single evaluation entry point for different retrieval model
-families while MTEB does not yet provide full native support for
-SentenceTransformers `SparseEncoder` models.
+Model loading:
+    - `--inference-free` builds a custom `SparseEncoder` (static query route)
+      and wraps it in MTEB's `SparseEncoderWrapper`;
+    - everything else uses `mteb.get_model(model_name)`, which auto-detects
+      dense, BM25 and sparse models.
 
-For dense embedding models and MTEB-supported baselines such as BM25, the script
-uses the standard MTEB flow:
+`--max-active-dims` is forwarded to `SparseEncoder.encode` through MTEB's
+`encode_kwargs`, so it prunes both queries and documents.
 
-    model = mteb.get_model(model_name)
-    results = mteb.evaluate(...)
+Examples
+--------
+BM25 baseline:
+    uv run python scripts/splade/evaluate_mteb_native.py \
+        --model mteb/baseline-bm25s
 
-For sparse SPLADE-style models, the script uses SentenceTransformers'
-`SparseInformationRetrievalEvaluator`, then writes the output into the same
-project result directory used by MTEB:
+SPLADE model:
+    uv run python scripts/splade/evaluate_mteb_native.py \
+        --model lopozz/splade-bert-base-italian-xxl-uncased
 
-    ../results/<organization>__<model>/prediction_folder/
+SPLADE model, inference-free queries and top-64 pruning:
+    uv run python scripts/splade/evaluate_mteb_native.py \
+        --model nickprock/splade-bert-base-italian-xxl-uncased-cv \
+        --inference-free
 
-The sparse branch also saves a small MTEB-like JSON result file so that sparse
-and dense evaluations can be tracked in a similar way until MTEB supports
-`SparseEncoder` directly.
+Dense model:
+    uv run python scripts/splade/evaluate_mteb_native.py \
+        --model google/embeddinggemma-300m --batch-size 32
 
-Intent
-------
-The goal is not to replace MTEB, but to bridge the current gap between:
+Equivalent plain MTEB code (what the script does for each of the above):
+    import mteb
 
-1. dense/BM25 models, which can be evaluated directly with `mteb.evaluate`, and
-2. sparse encoders, which currently require a sparse-specific evaluator.
-
-This makes it possible to compare dense, BM25, and SPLADE-style sparse retrieval
-models in the same experiment structure, with consistent output folders and
-similar result metadata.
-
-Current limitations
--------------------
-The sparse path is a workaround. It creates MTEB-like JSON files, but not real
-MTEB `TaskResult` objects. The scores are produced by SentenceTransformers'
-sparse evaluator, so metric names and output details may differ from native
-MTEB output.
-
-The sparse path currently assumes retrieval datasets with explicit corpus,
-queries, and qrels subsets, for example:
-
-    mteb/MuPLeR-retrieval
-    it-corpus
-    it-queries
-    it-qrels
-
-Additional tasks may require adding their dataset subset names and ID-column
-conventions.
-
-Future development
-------------------
-When MTEB adds native support for SentenceTransformers `SparseEncoder` models,
-the sparse branch should be removable. At that point, sparse models should be
-evaluated through the same standard MTEB API as dense models:
-
-    model = SparseEncoder(model_name)
-
-    results = mteb.evaluate(
-        model=model,
-        tasks=tasks,
-        cache=cache,
-        encode_kwargs={"batch_size": batch_size},
-        prediction_folder=prediction_folder,
-        overwrite_strategy="always",
-    )
-
-Until then, this script provides a reproducible compatibility layer for sparse
-retrieval evaluation while preserving a directory and result structure close to
-the standard MTEB workflow.
+    tasks = mteb.get_tasks(tasks=["MuPLeR-retrieval"])
+    model = mteb.get_model("google/embeddinggemma-300m")  # or the BM25 / SPLADE name
+    results = mteb.evaluate(model, tasks)
 """
 
-import json
-import time
+import argparse
+from pathlib import Path
+
+import mteb
 import torch
 import yaml
-import mteb
-import argparse
-
-from pathlib import Path
-from mteb.models import ModelMeta
+from huggingface_hub import file_exists
+from mteb.models.sentence_transformer_wrapper import SparseEncoderWrapper
 from sentence_transformers import SparseEncoder
-from mteb.models.model_meta import ScoringFunction
-from importlib.metadata import PackageNotFoundError, version
 from sentence_transformers.sentence_transformer.modules import Router, Transformer
 from sentence_transformers.sparse_encoder.modules import (
     SparseStaticEmbedding,
     SpladePooling,
 )
-from sentence_transformers.sparse_encoder.evaluation import (
-    SparseInformationRetrievalEvaluator,
-)
 
-from lm_toolkit.cache import ResultCache as SparseResultCache
-from lm_toolkit.tasks.registry import (
-    ALL_TASK_NAMES,
-    load_retrieval_dataset,
-    resolve_hf_subset,
-    resolve_id_column,
-)
-from lm_toolkit.tasks.retrieval.ita import (
-    CulturaVivaRetrieval,
-    MMarcoITRetrieval,
-)
+from lm_toolkit.tasks.retrieval.ita import CulturaVivaRetrieval, MMarcoITRetrieval
 from lm_toolkit.tasks.retrieval.multilingual import (
     GermanDPRRetrieval,
     JaQuADRetrieval,
@@ -112,197 +61,37 @@ from lm_toolkit.tasks.retrieval.multilingual import (
 )
 
 
-SPARSE_MODELS = {
-    "opensearch-project/opensearch-neural-sparse-encoding-multilingual-v1",
-    "nickprock/splade-bert-base-italian-xxl-uncased-cv",
-    "models/splade-bert-base-italian-xxl-uncased-cv",
-}
-
-
-def reshape_sparse_predictions(
-    source_path: Path,
-    destination_path: Path,
-    model_name: str,
-    model_revision: str,
-    hf_subset: str,
-    split: str,
-) -> None:
-    predictions = {}
-
-    with source_path.open("r") as source:
-        for line in source:
-            row = json.loads(line)
-            predictions[str(row["query_id"])] = {
-                str(result["corpus_id"]): result["score"] for result in row["results"]
-            }
-
-    mteb_predictions = {
-        "mteb_model_meta": {
-            "model_name": model_name,
-            "revision": model_revision,
-        },
-        hf_subset: {
-            split: predictions,
-        },
-    }
-
-    with destination_path.open("w") as destination:
-        json.dump(mteb_predictions, destination)
-
-    source_path.unlink()
-
-
-def get_package_versions() -> dict[str, str | None]:
-    package_versions = {}
-
-    for package_name in [
-        "mteb",
-        "torch",
-        "sentence-transformers",
-        "flash-attn",
-        "transformers",
-    ]:
-        try:
-            package_versions[package_name] = version(package_name)
-        except PackageNotFoundError:
-            package_versions[package_name] = None
-
-    return package_versions
-
-
-def save_sparse_model_metadata(
-    result_folder: Path,
-    model: SparseEncoder,
-    model_name: str,
-    model_revision: str,
-    languages: list[str],
-) -> None:
-    model_meta = ModelMeta.create_empty(
-        {
-            "name": model_name,
-            "revision": model_revision,
-            "languages": languages,
-            "n_parameters": sum(parameter.numel() for parameter in model.parameters()),
-            "license": model.model_card_data.license,
-            "open_weights": True,
-            "framework": ["Sentence Transformers", "Transformers", "safetensors"],
-            "reference": f"https://huggingface.co/{model_name}",
-            "similarity_fn_name": ScoringFunction.DOT_PRODUCT,
-            "model_type": ["sparse"],
-        }
-    )
-
-    with (result_folder / "model_meta.json").open("w") as metadata_file:
-        json.dump(model_meta.to_dict(), metadata_file, default=str, indent=4)
-
-
-def save_run_settings(
-    result_folder: Path,
-    task_name: str,
-    split: str,
-    hf_subset: str,
-    batch_size: int,
-) -> None:
-    run_settings_path = result_folder / "run_settings.jsonl"
-    run_settings = {
-        "task": task_name,
-        "split": split,
-        "subset": hf_subset,
-        "version": get_package_versions(),
-        "encode_kwargs": {"batch_size": batch_size},
-    }
-    existing_settings = []
-
-    if run_settings_path.exists():
-        with run_settings_path.open("r") as settings_file:
-            existing_settings = [
-                json.loads(line) for line in settings_file if line.strip()
-            ]
-
-    run_key = (task_name, split, hf_subset)
-    existing_settings = [
-        setting
-        for setting in existing_settings
-        if (setting["task"], setting["split"], setting["subset"]) != run_key
-    ]
-
-    with run_settings_path.open("w") as settings_file:
-        for setting in [*existing_settings, run_settings]:
-            settings_file.write(json.dumps(setting) + "\n")
-
-
-def task_languages(task, hf_subset: str) -> list[str]:
-    """eval_langs is a dict keyed by hf_subset for multilingual tasks, but a
-    plain list for monolingual ones (e.g. our custom CulturaViva-Retrieval)."""
-    eval_langs = task.metadata.eval_langs
-    return eval_langs[hf_subset] if isinstance(eval_langs, dict) else eval_langs
-
-
-def is_sparse_model(model_name: str) -> bool:
-    model_path = Path(model_name)
-    return (
-        model_name in SPARSE_MODELS
-        or (model_path / "router_config.json").exists()
-        or (model_path / "modules.json").exists()
-    )
-
-
-def get_sparse_model_revision(model_name: str, model) -> str:
-    for module in model.modules():
-        auto_model = getattr(module, "auto_model", None)
-        config = getattr(auto_model, "config", None)
-        revision = getattr(config, "_commit_hash", None)
-        if revision:
-            return revision
-
-    model_path = Path(model_name)
-    if model_path.exists():
-        local_name = (
-            model_path.parent.name if model_path.name == "final" else model_path.name
-        )
-        return f"local-{local_name}"
-
-    return "unknown"
-
-
-def describe_sparse_query_expansion(model) -> str:
-    for module in model.modules():
-        sub_modules = getattr(module, "sub_modules", None)
-        if sub_modules is None or "query" not in sub_modules:
-            continue
-
-        query_module_names = [
-            query_module.__class__.__name__ for query_module in sub_modules["query"]
-        ]
-        has_query_expansion = "SpladePooling" in query_module_names
-        status = "enabled" if has_query_expansion else "disabled"
-        route = " -> ".join(query_module_names)
-        return f"Sparse query expansion by model configuration: {status} ({route})"
-
-    top_level_module_names = [module.__class__.__name__ for module in model]
-    if "SpladePooling" in top_level_module_names:
-        route = " -> ".join(top_level_module_names)
-        return f"Sparse query expansion by model configuration: enabled ({route})"
-
-    return "Sparse query expansion by model configuration: unknown"
+def has_router(model_name: str) -> bool:
+    """True if the checkpoint (local dir or Hub repo) was saved with a Router."""
+    if Path(model_name).is_dir():
+        return (Path(model_name) / "router_config.json").exists()
+    try:
+        return file_exists(model_name, "router_config.json")
+    except Exception:
+        return False
 
 
 def load_sparse_model(model_name: str, inference_free: bool) -> SparseEncoder:
     if not inference_free:
         return SparseEncoder(model_name)
 
-    # Force the query side through a SparseStaticEmbedding (lexical reweighting
-    # of input tokens only, no MLM expansion), while documents keep the full
-    # Transformer + SpladePooling route.
+    if has_router(model_name):
+        raise ValueError(
+            f"{model_name} already has a query/document Router (it was saved with "
+            "its own query route, e.g. trained inference-free), so --inference-free "
+            "cannot be applied. Run without --inference-free to use it as saved."
+        )
+
+    # Query side: SparseStaticEmbedding (lexical reweighting only, no MLM
+    # expansion). Document side: full Transformer + SpladePooling.
     mlm_transformer = Transformer(model_name, transformer_task="fill-mask")
     splade_pooling = SpladePooling(
         pooling_strategy="max",
         embedding_dimension=mlm_transformer.get_embedding_dimension(),
     )
-    # The MLM head's real output width is config.vocab_size, which for some
-    # checkpoints (e.g. dbmdz/bert-base-italian-xxl-uncased) is larger than
-    # len(tokenizer.get_vocab()) -- size the static embedding to match it so
-    # query and document vectors share the same dimensionality.
+    # MLM head width is config.vocab_size, which can exceed len(tokenizer vocab)
+    # (e.g. dbmdz/bert-base-italian-xxl-uncased); match it so query and document
+    # vectors share the same dimensionality.
     vocab_size = mlm_transformer.model.config.vocab_size
     router = Router.for_query_document(
         query_modules=[
@@ -318,12 +107,10 @@ def load_sparse_model(model_name: str, inference_free: bool) -> SparseEncoder:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Evaluate retrieval models with MTEB.")
-    parser.add_argument(
-        "--model-name",
-        required=True,
-        help="Model name or Hugging Face repository.",
+    parser = argparse.ArgumentParser(
+        description="Evaluate retrieval models with native MTEB (dense, BM25, sparse)."
     )
+    parser.add_argument("--model", required=True, help="Model name or HF repo.")
     parser.add_argument(
         "--config-path",
         type=Path,
@@ -337,38 +124,30 @@ def parse_args() -> argparse.Namespace:
         "--inference-free",
         action="store_true",
         dest="inference_free",
-        help="Sparse models only: replace the query route with a "
-        "SparseStaticEmbedding (lexical reweighting only, no MLM expansion).",
+        help="Sparse models only: replace the query route with a SparseStaticEmbedding.",
     )
     parser.add_argument(
         "--max-active-dims",
         type=int,
         default=None,
-        help="Sparse models only: post-hoc top-k pruning of document/query "
-        "activations before scoring (keeps only the k highest-weighted "
-        "dimensions, zeroes the rest). Default: unpruned.",
+        help="Sparse models only: keep only the k highest-weighted dimensions of "
+        "each query/document embedding. Default: unpruned.",
+    )
+    parser.add_argument(
+        "--save-to-cpu",
+        action="store_true",
+        help="Sparse models only: keep query/document embeddings on the CPU so the "
+        "sparse score product runs in system RAM instead of GPU memory (fixes CUDA "
+        "OOM in similarity; encoding itself still uses the GPU).",
     )
     return parser.parse_args()
 
 
-def main():
-    args = parse_args()
-    if args.batch_size < 1:
-        raise ValueError("--batch-size must be a positive integer.")
-
-    split = "test"
-    model_name = args.model_name
-    batch_size = args.batch_size
-    overwrite_strategy = args.overwrite_strategy
-    cache = mteb.ResultCache(".")
-    safe_model_name = model_name.replace("/", "__")
-
-    # Load MTEB tasks
-
-    with args.config_path.open("r") as f:
+def build_tasks(config_path: Path) -> list:
+    with config_path.open("r") as f:
         config = yaml.safe_load(f)
 
-    excluded = set(config["excluded_tasks"])
+    excluded = set(config["excluded_tasks"]) | {"WebFAQRetrieval"}
 
     tasks = mteb.get_tasks(
         languages=config["languages"],
@@ -377,180 +156,76 @@ def main():
         exclusive_language_filter=True,
         eval_splits=["test"],
     )
-
     tasks = [t for t in tasks if t.metadata.name not in excluded]
-    # Not registered in MTEB's task registry, so mteb.get_tasks() never returns it.
-    tasks.append(CulturaVivaRetrieval())
-    tasks.append(MMarcoITRetrieval())
-    # tasks.append(MMarcoITRetrieval2())
-    tasks.append(NorQuADRetrieval())
-    tasks.append(JaQuADRetrieval())
-    tasks.append(SberQuADRetrieval())
-    tasks.append(GermanDPRRetrieval())
 
-    tasks = [t for t in tasks if t.metadata.name not in ["WebFAQRetrieval"]]
-
-    if not is_sparse_model(model_name):
-        model = mteb.get_model(model_name)
-        prediction_folder = args.results_dir / safe_model_name / "prediction_folder"
-        prediction_folder.mkdir(parents=True, exist_ok=True)
-
-        results = mteb.evaluate(
-            model=model,
-            tasks=tasks,
-            cache=cache,
-            encode_kwargs={"batch_size": batch_size},
-            prediction_folder=str(prediction_folder),
-            overwrite_strategy=overwrite_strategy,
+    # Not in MTEB's task registry, so mteb.get_tasks() never returns them, and
+    # they are not language-filtered by it either: apply the same filter here,
+    # otherwise bilingual tasks (e.g. JaQuAD: it + ja) also run their non-Italian
+    # subset and the averaged score no longer matches the Italian-only one.
+    tasks += [
+        t.filter_languages(
+            config["languages"],
+            exclusive_language_filter=True,
         )
+        for t in [
+            CulturaVivaRetrieval(),
+            MMarcoITRetrieval(),
+            NorQuADRetrieval(),
+            JaQuADRetrieval(),
+            SberQuADRetrieval(),
+            GermanDPRRetrieval(),
+        ]
+    ]
+    return tasks
 
-        print(results)
 
+def main():
+    args = parse_args()
+    if args.batch_size < 1:
+        raise ValueError("--batch-size must be a positive integer.")
+
+    model_name = args.model
+    tasks = build_tasks(args.config_path)
+    # tasks = [
+    #     t
+    #     for t in build_tasks(args.config_path)
+    #     if t.metadata.name == "MuPLeR-retrieval"
+    # ]
+    # print(tasks)
+
+    if args.inference_free or Path(model_name).is_dir():
+        # MTEB can't resolve these from the Hub: local checkpoints have no Hub
+        # metadata (no loader), and the inference-free ablation needs a custom
+        # query route. Load the SparseEncoder ourselves and wrap it.
+        model = SparseEncoderWrapper(load_sparse_model(model_name, args.inference_free))
+        # Keep the original name so results are stored under the right folder.
+        model.mteb_model_meta = model.mteb_model_meta.model_copy(
+            update={"name": model_name}
+        )
     else:
-        model = load_sparse_model(model_name, args.inference_free)
-        print(describe_sparse_query_expansion(model))
-        all_task_results = []
+        model = mteb.get_model(model_name)
 
-        model_revision = get_sparse_model_revision(model_name, model)
-        sparse_cache = SparseResultCache(root=args.results_dir)
-        result_folder = args.results_dir / safe_model_name / model_revision
-        result_folder.mkdir(parents=True, exist_ok=True)
-        prediction_folder = args.results_dir / safe_model_name / "prediction_folder"
-        prediction_folder.mkdir(parents=True, exist_ok=True)
-        evaluated_languages = sorted(
-            {
-                language
-                for task in tasks
-                for hf_subset in task.hf_subsets
-                for language in task_languages(task, hf_subset)
-            }
-        )
-        save_sparse_model_metadata(
-            result_folder=result_folder,
-            model=model,
-            model_name=model_name,
-            model_revision=model_revision,
-            languages=evaluated_languages,
-        )
+    encode_kwargs = {"batch_size": args.batch_size}
+    if args.max_active_dims is not None:
+        encode_kwargs["max_active_dims"] = args.max_active_dims
 
-        for task in tasks:
-            task_name = task.metadata.name
-            if task_name not in ALL_TASK_NAMES:
-                raise ValueError(
-                    f"No sparse dataset mapping defined for task: {task_name}. "
-                    "Add it to HOSTED_TASK_CONFIGS or LOCAL_TASK_DIRS in lm_toolkit/tasks/registry.py."
-                )
+    if args.save_to_cpu:
+        # Forwarded by MTEB to SparseEncoder.encode(save_to_cpu=...).
+        encode_kwargs["save_to_cpu"] = True
 
-            if overwrite_strategy != "always" and sparse_cache.has_result(
-                model_name, task_name, model_revision
-            ):
-                print(f"Skipping {task_name}: cached result exists")
-                continue
+    safe_model_name = model_name.replace("/", "__")
+    prediction_folder = args.results_dir / safe_model_name / "prediction_folder"
+    prediction_folder.mkdir(parents=True, exist_ok=True)
 
-            print(f"Evaluating sparse model on task: {task_name}")
-
-            hf_subset = resolve_hf_subset(task_name)
-            id_column = resolve_id_column(task_name)
-            corpus_ds = load_retrieval_dataset(task_name, "corpus", split)
-            queries_ds = load_retrieval_dataset(task_name, "queries", split)
-            qrels_ds = load_retrieval_dataset(task_name, "qrels", split)
-
-            queries = {str(row[id_column]): row["text"] for row in queries_ds}
-            corpus = {str(row[id_column]): row["text"] for row in corpus_ds}
-            relevant_docs = {}
-
-            for row in qrels_ds:
-                qid = str(row["query-id"])
-                cid = str(row["corpus-id"])
-                score = row["score"]
-
-                if score > 0:
-                    relevant_docs.setdefault(qid, set()).add(cid)
-
-            ir_evaluator = SparseInformationRetrievalEvaluator(
-                queries=queries,
-                corpus=corpus,
-                relevant_docs=relevant_docs,
-                show_progress_bar=True,
-                batch_size=batch_size,
-                accuracy_at_k=[1],
-                precision_recall_at_k=[1, 3, 5, 10],
-                mrr_at_k=[10],
-                ndcg_at_k=[10],
-                map_at_k=[100],
-                write_csv=False,
-                write_predictions=True,
-                max_active_dims=args.max_active_dims,
-            )
-
-            evaluation_start = time.perf_counter()
-            sparse_scores = ir_evaluator(
-                model,
-                output_path=str(prediction_folder),
-            )
-            evaluation_time = time.perf_counter() - evaluation_start
-
-            sparse_predictions_path = (
-                prediction_folder
-                / "Information-Retrieval_evaluation_predictions_dot.jsonl"
-            )
-            mteb_predictions_path = prediction_folder / f"{task_name}_predictions.json"
-            reshape_sparse_predictions(
-                source_path=sparse_predictions_path,
-                destination_path=mteb_predictions_path,
-                model_name=model_name,
-                model_revision=model_revision,
-                hf_subset=hf_subset,
-                split=split,
-            )
-
-            # Convert SentenceTransformers sparse output to MTEB-like output
-            mteb_scores = {
-                "ndcg_at_10": sparse_scores.get("dot_ndcg@10"),
-                "map_at_100": sparse_scores.get("dot_map@100"),
-                "recall_at_1": sparse_scores.get("dot_recall@1"),
-                "recall_at_3": sparse_scores.get("dot_recall@3"),
-                "recall_at_5": sparse_scores.get("dot_recall@5"),
-                "recall_at_10": sparse_scores.get("dot_recall@10"),
-                "accuracy": sparse_scores.get("dot_accuracy@1"),
-                "precision_at_1": sparse_scores.get("dot_precision@1"),
-                "precision_at_3": sparse_scores.get("dot_precision@3"),
-                "precision_at_5": sparse_scores.get("dot_precision@5"),
-                "precision_at_10": sparse_scores.get("dot_precision@10"),
-                "mrr_at_10": sparse_scores.get("dot_mrr@10"),
-                "main_score": sparse_scores.get("dot_ndcg@10"),
-                "hf_subset": hf_subset,
-                "languages": task_languages(task, hf_subset),
-                "mteb_version": mteb.__version__,
-            }
-
-            task_result = {
-                "dataset_revision": task.metadata.revision,
-                "task_name": task_name,
-                "mteb_version": mteb.__version__,
-                "scores": {
-                    split: [mteb_scores],
-                },
-                "evaluation_time": evaluation_time,
-                "kg_co2_emissions": None,
-                "date": time.time(),
-            }
-
-            all_task_results.append(task_result)
-
-            task_result_path = sparse_cache.save_result(
-                task_result, model=model_name, task=task_name, revision=model_revision
-            )
-
-            save_run_settings(
-                result_folder=result_folder,
-                task_name=task_name,
-                split=split,
-                hf_subset=hf_subset,
-                batch_size=batch_size,
-            )
-
-            print(f"Saved task result to: {task_result_path}")
+    results = mteb.evaluate(
+        model=model,
+        tasks=tasks,
+        cache=mteb.ResultCache("."),
+        encode_kwargs=encode_kwargs,
+        prediction_folder=str(prediction_folder),
+        overwrite_strategy=args.overwrite_strategy,
+    )
+    print(results)
 
 
 if __name__ == "__main__":
