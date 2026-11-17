@@ -13,28 +13,21 @@ Model loading:
 Examples
 --------
 BM25 baseline:
-    uv run python scripts/splade/evaluate_mteb_native.py \
+    uv run python scripts/splade/evaluate_mteb.py \
         --model mteb/baseline-bm25s
 
 SPLADE model:
-    uv run python scripts/splade/evaluate_mteb_native.py \
+    uv run python scripts/splade/evaluate_mteb.py \
         --model lopozz/splade-bert-base-italian-xxl-uncased
 
 SPLADE model, inference-free queries and top-64 pruning:
-    uv run python scripts/splade/evaluate_mteb_native.py \
+    uv run python scripts/splade/evaluate_mteb.py \
         --model nickprock/splade-bert-base-italian-xxl-uncased-cv \
         --inference-free
 
 Dense model:
-    uv run python scripts/splade/evaluate_mteb_native.py \
+    uv run python scripts/splade/evaluate_mteb.py \
         --model google/embeddinggemma-300m --batch-size 32
-
-Equivalent plain MTEB code (what the script does for each of the above):
-    import mteb
-
-    tasks = mteb.get_tasks(tasks=["MuPLeR-retrieval"])
-    model = mteb.get_model("google/embeddinggemma-300m")  # or the BM25 / SPLADE name
-    results = mteb.evaluate(model, tasks)
 """
 
 import argparse
