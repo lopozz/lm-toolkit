@@ -8,14 +8,14 @@ analysis in lm_toolkit/benchmarks/sparse_analysis.py.
 Typical usage:
 
     python3 scripts/splade/analyze_dataset_stats.py \
-      --tokenizer nickprock/splade-bert-base-italian-xxl-uncased-cv \
+      --tokenizer lopozz/splade-bert-base-italian-xxl-uncased \
       --task-name MuPLeR-retrieval --language it
 
 Or against a local dataset directory (expects {split}_corpus.parquet and
 {split}_queries.parquet inside it) instead of an MTEB task:
 
     python3 scripts/splade/analyze_dataset_stats.py \
-      --tokenizer nickprock/splade-bert-base-italian-xxl-uncased-cv \
+      --tokenizer lopozz/splade-bert-base-italian-xxl-uncased \
       --data-dir data/sberquad_mteb_itquad --split test
 """
 
@@ -39,13 +39,13 @@ from lm_toolkit.benchmarks.sparse_analysis import (
 
 _SENTINEL_MAX_LENGTH = 100_000  # unset tokenizers report an unusably large sentinel
 
-def load_local_corpus(data_dir: Path, split: str) -> dict[str, str]:
-    dataset = Dataset.from_parquet(
-        str(data_dir / f"{split}_corpus.parquet")
-    )
 
+def load_local_corpus(data_dir: Path, split: str) -> dict[str, str]:
+    dataset = Dataset.from_parquet(str(data_dir / f"{split}_corpus.parquet"))
+    print(dataset)
     return {
         str(row["_id"]): "\n".join(
+            # str(row["id"]): "\n".join(
             part
             for part in (
                 str(row.get("title") or "").strip(),
@@ -58,14 +58,14 @@ def load_local_corpus(data_dir: Path, split: str) -> dict[str, str]:
 
 
 def load_local_queries(data_dir: Path, split: str) -> dict[str, str]:
-    dataset = Dataset.from_parquet(
-        str(data_dir / f"{split}_queries.parquet")
-    )
+    dataset = Dataset.from_parquet(str(data_dir / f"{split}_queries.parquet"))
 
     return {
         str(row["_id"]): str(row["text"] or "").strip()
+        # str(row["id"]): str(row["text"] or "").strip()
         for row in dataset
     }
+
 
 def resolve_max_length(tokenizer: AutoTokenizer) -> int:
     max_length = tokenizer.model_max_length
@@ -74,7 +74,9 @@ def resolve_max_length(tokenizer: AutoTokenizer) -> int:
     return max_length
 
 
-def text_length_metrics(text: str, tokenizer: AutoTokenizer, encoder_max_length: int) -> dict:
+def text_length_metrics(
+    text: str, tokenizer: AutoTokenizer, encoder_max_length: int
+) -> dict:
     raw_ids = tokenizer(text, add_special_tokens=False, truncation=False)["input_ids"]
     effective_ids = raw_ids[: encoder_max_length - 2]
     return {
@@ -90,7 +92,10 @@ def build_length_frame(
 ) -> pd.DataFrame:
     return pd.DataFrame(
         [
-            {"text_id": text_id, **text_length_metrics(text, tokenizer, encoder_max_length)}
+            {
+                "text_id": text_id,
+                **text_length_metrics(text, tokenizer, encoder_max_length),
+            }
             for text_id, text in texts_by_id.items()
         ]
     )
@@ -193,18 +198,24 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def load_tokenizer(name_or_path: str):
+    """Load a tokenizer from a plain checkpoint or a Router-style SparseEncoder.
+
+    SparseEncoders saved with a Router (e.g. inference-free models) keep their
+    tokenizer inside submodule folders, not at the repo root.
+    """
+    try:
+        return AutoTokenizer.from_pretrained(name_or_path)
+    except (OSError, ValueError):
+        return AutoTokenizer.from_pretrained(
+            name_or_path, subfolder="document_0_Transformer"
+        )
+
+
 def main() -> None:
     args = parse_args()
-    # task = RetrievalTask(task_name=args.task_name, language=args.language, split=args.split)
-    # tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
-    # encoder_max_length = resolve_max_length(tokenizer)
 
-    # texts_by_label = {
-    #     "document": load_corpus(task),
-    #     "query": load_queries(task),
-    # }
-
-    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
+    tokenizer = load_tokenizer(args.tokenizer)
     encoder_max_length = resolve_max_length(tokenizer)
 
     if args.data_dir is not None:
@@ -237,7 +248,11 @@ def main() -> None:
 
         # print(f"\n{task.task_name} -- {label} bucketed summary")
         print(f"\n{dataset_name} -- {label} bucketed summary")
-        print(transpose_by_stat(summarize_bucket_lengths(frame), "bucket").to_string(index=False))
+        print(
+            transpose_by_stat(summarize_bucket_lengths(frame), "bucket").to_string(
+                index=False
+            )
+        )
 
         print(f"\n{dataset_name} -- {label} effective token length histogram")
         print(ascii_histogram(frame["effective_token_length"]))
