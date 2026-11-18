@@ -12,6 +12,8 @@ excluded_tasks:
   - VDRMultilingualRetrieval
   # too long docs
   - MultiLongDocRetrieval
+  # too many docs ~258k
+  - WebFAQRetrieval
 
 split_overrides:
   MKQARetrieval: [train]

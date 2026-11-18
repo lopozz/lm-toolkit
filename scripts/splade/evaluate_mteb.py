@@ -45,13 +45,6 @@ from sentence_transformers.sparse_encoder.modules import (
     SpladePooling,
 )
 
-from lm_toolkit.tasks.retrieval.ita import CulturaVivaRetrieval, MMarcoITRetrieval
-from lm_toolkit.tasks.retrieval.multilingual import (
-    GermanDPRRetrieval,
-    JaQuADRetrieval,
-    NorQuADRetrieval,
-    SberQuADRetrieval,
-)
 
 
 def has_router(model_name: str) -> bool:
@@ -140,7 +133,7 @@ def build_tasks(config_path: Path) -> list:
     with config_path.open("r") as f:
         config = yaml.safe_load(f)
 
-    excluded = set(config["excluded_tasks"]) | {"WebFAQRetrieval"}
+    excluded = set(config.get("excluded_tasks") or [])
 
     tasks = mteb.get_tasks(
         languages=config["languages"],
@@ -165,20 +158,20 @@ def build_tasks(config_path: Path) -> list:
     # they are not language-filtered by it either: apply the same filter here,
     # otherwise bilingual tasks (e.g. JaQuAD: it + ja) also run their non-Italian
     # subset and the averaged score no longer matches the Italian-only one.
-    tasks += [
-        t.filter_languages(
-            config["languages"],
-            exclusive_language_filter=True,
-        )
-        for t in [
-            CulturaVivaRetrieval(),
-            MMarcoITRetrieval(),
-            NorQuADRetrieval(),
-            JaQuADRetrieval(),
-            SberQuADRetrieval(),
-            GermanDPRRetrieval(),
-        ]
-    ]
+    # tasks += [
+    #     t.filter_languages(
+    #         config["languages"],
+    #         exclusive_language_filter=True,
+    #     )
+    #     for t in [
+    #         CulturaVivaRetrieval(),
+    #         MMarcoITRetrieval(),
+    #         NorQuADRetrieval(),
+    #         JaQuADRetrieval(),
+    #         SberQuADRetrieval(),
+    #         GermanDPRRetrieval(),
+    #     ]
+    # ]
     return tasks
 
 

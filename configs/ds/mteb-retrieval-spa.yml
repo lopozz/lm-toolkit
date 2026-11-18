@@ -1,0 +1,22 @@
+languages:
+  - spa
+
+modalities:
+  - text
+
+task_types:
+  - Retrieval
+
+excluded_tasks:
+  # multimodal (text + image): documents are page images, text models can't read them
+  - VDRMultilingualRetrieval
+  # too many docs
+  - MIRACLRetrieval # 10.4M
+  - WebFAQRetrieval # ~258k
+
+split_overrides:
+  MIRACLRetrievalHardNegatives: [dev]
+  MIRACLRetrievalHardNegatives.v2: [dev]
+  MMarcoRetrievalMultilingual: [dev]
+  XQuADRetrieval: [validation]
+  MKQARetrieval: [train]
