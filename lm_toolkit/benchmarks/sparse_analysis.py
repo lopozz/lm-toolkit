@@ -1023,3 +1023,88 @@ def evaluate_sparse_retrieval(
         )
 
     return results
+
+
+# ---------------------------------------------------------------------------
+# BM25 baseline (mteb/baseline-bm25s)
+#
+# A BM25 document vector is non-zero only for the terms the document contains, so
+# its number of active dimensions is the number of unique tokens after mteb's own
+# preprocessing (language stopwords + Snowball stemmer), tokenized with mteb's
+# BM25Tokenizer so the numbers match what the baseline indexes. Only
+# `active_dims` and `sparsity_ratio` are reported: expansion/retention metrics are
+# meaningless for BM25 and token length is not bucketed because BM25 has no
+# encoder truncation. `sparsity_ratio` is relative to the bm25s vocabulary of the
+# corpus, so it is not directly comparable with a BERT-vocab SPLADE model;
+# `active_dims` is.
+# ---------------------------------------------------------------------------
+
+BM25_MODEL_NAME = "mteb/baseline-bm25s"
+
+# Task language (as used in this repo) -> ISO 639-3 code expected by mteb's BM25Tokenizer.
+LANGUAGE_TO_ISO3 = {"it": "ita"}
+
+
+def bm25_document_rows(
+    task: RetrievalTask, corpus: dict[str, str]
+) -> list[dict[str, Any]]:
+    if task.language not in LANGUAGE_TO_ISO3:
+        raise ValueError(
+            f"Unsupported language {task.language!r} for BM25; "
+            f"add it to LANGUAGE_TO_ISO3 (supported: {sorted(LANGUAGE_TO_ISO3)})."
+        )
+
+    # Imported here so the SPLADE analysis does not require the bm25s extra.
+    from mteb.models.model_implementations.bm25 import BM25Tokenizer
+
+    document_ids = list(corpus)
+    tokenizer = BM25Tokenizer(language=LANGUAGE_TO_ISO3[task.language])
+    tokenized = tokenizer.fit_transform(
+        [corpus[document_id] for document_id in document_ids]
+    )
+
+    vocab_size = len({token_id for ids in tokenized.ids for token_id in ids})
+
+    return [
+        {
+            "dataset": task.task_name,
+            "document_id": document_id,
+            "active_dims": float(len(set(ids))),
+            "sparsity_ratio": 1.0 - len(set(ids)) / vocab_size,
+        }
+        for document_id, ids in zip(document_ids, tokenized.ids, strict=True)
+    ]
+
+
+def evaluate_bm25_sparsity(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    for task_config in tasks:
+        if task_config["task_name"] not in ALL_TASK_NAMES:
+            raise ValueError(
+                f"Unsupported task: {task_config['task_name']!r}. "
+                f"Must be one of: {sorted(ALL_TASK_NAMES)}"
+            )
+
+    results: list[dict[str, Any]] = []
+
+    for task_config in tasks:
+        task = RetrievalTask(**task_config)
+        rows = bm25_document_rows(task, load_corpus(task))
+        results.extend(rows)
+
+        frame = pd.DataFrame(rows)
+        overall_summary = summarize_overall(frame)
+
+        output_dir = (
+            Path("outputs")
+            / "sparse_analysis"
+            / BM25_MODEL_NAME.replace("/", "__")
+            / task.task_name
+        )
+        output_dir.mkdir(parents=True, exist_ok=True)
+        frame.to_csv(output_dir / "document_frame.csv", index=False)
+        overall_summary.to_csv(output_dir / "overall_summary.csv", index=False)
+
+        print(f"\nBM25 overall summary: {task.task_name} ({len(frame):,} documents)")
+        print(overall_summary.round(3).to_string(index=False))
+
+    return results

@@ -95,7 +95,7 @@ def main() -> None:
     args = parse_args()
 
     if args.model == "mteb/baseline-bm25s":
-        from lm_toolkit.benchmarks.bm25_sparsity import evaluate_bm25_sparsity
+        from lm_toolkit.benchmarks.sparse_analysis import evaluate_bm25_sparsity
 
         evaluate_bm25_sparsity(
             tasks=[
