@@ -17,3 +17,13 @@ excluded_tasks:
 
 split_overrides:
   MKQARetrieval: [train]
+
+# Not in MTEB's task registry: added by the script on top of get_tasks().
+# Names are keys of lm_toolkit.tasks.retrieval.CUSTOM_TASKS.
+custom_tasks:
+  - CulturaViva-Retrieval
+  - MMarco-IT-Retrieval
+  - NorQuADRetrieval
+  - JaQuADRetrieval
+  - SberQuADRetrieval
+  - GermanDPRRetrieval

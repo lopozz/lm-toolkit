@@ -45,6 +45,7 @@ from sentence_transformers.sparse_encoder.modules import (
     SpladePooling,
 )
 
+from lm_toolkit.tasks.retrieval import CUSTOM_TASKS
 
 
 def has_router(model_name: str) -> bool:
@@ -154,24 +155,21 @@ def build_tasks(config_path: Path) -> list:
         for t in tasks
     ]
 
-    # Not in MTEB's task registry, so mteb.get_tasks() never returns them, and
-    # they are not language-filtered by it either: apply the same filter here,
-    # otherwise bilingual tasks (e.g. JaQuAD: it + ja) also run their non-Italian
-    # subset and the averaged score no longer matches the Italian-only one.
-    # tasks += [
-    #     t.filter_languages(
-    #         config["languages"],
-    #         exclusive_language_filter=True,
-    #     )
-    #     for t in [
-    #         CulturaVivaRetrieval(),
-    #         MMarcoITRetrieval(),
-    #         NorQuADRetrieval(),
-    #         JaQuADRetrieval(),
-    #         SberQuADRetrieval(),
-    #         GermanDPRRetrieval(),
-    #     ]
-    # ]
+    # Custom tasks, selected by name in the config (`custom_tasks`). They are not in
+    # MTEB's task registry, so get_tasks() never returns them.
+    custom_names = config.get("custom_tasks") or []
+    unknown = set(custom_names) - CUSTOM_TASKS.keys()
+    if unknown:
+        raise ValueError(
+            f"Unknown custom_tasks {sorted(unknown)}; available: {sorted(CUSTOM_TASKS)}"
+        )
+    tasks += [
+        CUSTOM_TASKS[name]().filter_languages(
+            config["languages"],
+            exclusive_language_filter=True,
+        )
+        for name in custom_names
+    ]
     return tasks
 
 
@@ -182,6 +180,8 @@ def main():
 
     model_name = args.model
     tasks = build_tasks(args.config_path)
+    tasks = tasks[-2:]
+    print(tasks)
     # tasks = [
     #     t
     #     for t in build_tasks(args.config_path)
