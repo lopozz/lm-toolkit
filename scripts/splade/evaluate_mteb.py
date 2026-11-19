@@ -180,8 +180,7 @@ def main():
 
     model_name = args.model
     tasks = build_tasks(args.config_path)
-    tasks = tasks[-2:]
-    print(tasks)
+    
     # tasks = [
     #     t
     #     for t in build_tasks(args.config_path)
